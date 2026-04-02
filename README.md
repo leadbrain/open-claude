@@ -58,38 +58,24 @@ Stop Hook (auto-reply.sh)
 
    OAuth2 URL scope: `bot` + `applications.commands`
 
-### 2. Install the plugin
+### 2. Install and configure
 
-**Option A — Plugin marketplace (recommended)**:
 ```bash
-# Add as a custom marketplace
+# Install
 claude plugins marketplace add leadbrain/open-claude
 claude plugins install open-claude@open-claude
 
-# Configure
+# Configure (in Claude Code)
 /open-claude:configure <your-bot-token>
 ```
 
-**Option B — Plugin directory**:
+Alternative — load from local directory:
 ```bash
 git clone https://github.com/leadbrain/open-claude
 claude --plugin-dir ./open-claude
 ```
 
-**Option C — Manual install**:
-```bash
-cd /path/to/your/workspace
-git clone https://github.com/leadbrain/open-claude .claude/plugins/open-claude
-.claude/plugins/open-claude/setup.sh
-```
-
-### 3. Start Claude Code
-
-```bash
-claude   # MCP server + hooks load automatically via plugin system
-```
-
-### 4. Pair your Discord account
+### 3. Pair your Discord account
 
 1. DM the bot on Discord — you'll get a pairing code
 2. In Claude Code: `/open-claude:access pair <code>`
@@ -156,7 +142,6 @@ open-claude/
 │   └── cron-runner.sh      # Cron job executor
 ├── server.ts               # MCP server
 ├── package.json
-├── setup.sh                # Optional manual setup
 ├── README.md
 ├── ACCESS.md
 └── LICENSE
