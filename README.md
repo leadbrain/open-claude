@@ -65,7 +65,7 @@ Stop Hook (auto-reply.sh)
 
 ```bash
 cd /path/to/your/workspace
-git clone https://github.com/user/open-claude .claude/plugins/open-claude
+git clone https://github.com/leadbrain/open-claude .claude/plugins/open-claude
 .claude/plugins/open-claude/setup.sh
 ```
 
