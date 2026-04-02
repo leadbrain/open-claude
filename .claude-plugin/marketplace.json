@@ -1,0 +1,19 @@
+{
+  "name": "open-claude",
+  "owner": {
+    "name": "leadbrain"
+  },
+  "plugins": [
+    {
+      "name": "open-claude",
+      "description": "Discord channel for Claude Code — talk to Claude from Discord with auto-reply hooks, independent thread sessions, typing indicators, access control, and cron job support.",
+      "category": "integration",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/leadbrain/open-claude.git",
+        "sha": "054984cc669bea542b379aa8db5702fd2a780cf4"
+      },
+      "homepage": "https://github.com/leadbrain/open-claude"
+    }
+  ]
+}
