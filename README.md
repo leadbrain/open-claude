@@ -69,6 +69,8 @@ claude plugins install open-claude@open-claude
 /open-claude:configure <your-bot-token>
 ```
 
+After install, **restart Claude Code** (exit and reopen) to load the plugin.
+
 Alternative — load from local directory:
 ```bash
 git clone https://github.com/leadbrain/open-claude
