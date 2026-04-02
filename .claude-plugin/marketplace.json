@@ -11,8 +11,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/leadbrain/open-claude.git",
-        "ref": "main",
-        "sha": "6fd58359c2cd2bbc5da20cb3e9f2b5e95b2df1e3"
+        "ref": "main"
       },
       "homepage": "https://github.com/leadbrain/open-claude"
     }
