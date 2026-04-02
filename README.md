@@ -9,6 +9,7 @@ Discord channel plugin for [Claude Code](https://docs.anthropic.com/en/docs/clau
 - **Typing indicator**: Shows "typing..." while Claude processes
 - **Access control**: Pairing codes for DMs, per-channel allowlists for servers
 - **Slash commands**: `/clear`, `/compact`, `/restart`, `/enter`, `/esc` (requires tmux)
+- **Skills**: `/open-claude:configure` and `/open-claude:access` for setup and access management
 - **Cron jobs**: Run skills on a schedule, results sent to Discord threads
 
 ## Architecture
@@ -53,42 +54,50 @@ Stop Hook (auto-reply.sh)
    - Message Content Intent
    - Server Members Intent (optional, for mentions)
 4. Invite the bot to your server with these permissions:
-   - Send Messages
-   - Read Message History
-   - Add Reactions
-   - Manage Messages (for editing)
-   - Use Slash Commands
+   - Send Messages, Read Message History, Add Reactions, Manage Messages, Use Slash Commands
 
    OAuth2 URL scope: `bot` + `applications.commands`
 
 ### 2. Install the plugin
 
+**Option A — Plugin marketplace (recommended)**:
+```bash
+# Add as a custom marketplace
+claude plugins marketplace add leadbrain/open-claude
+claude plugins install open-claude@open-claude
+
+# Configure
+/open-claude:configure <your-bot-token>
+```
+
+**Option B — Plugin directory**:
+```bash
+git clone https://github.com/leadbrain/open-claude
+claude --plugin-dir ./open-claude
+```
+
+**Option C — Manual install**:
 ```bash
 cd /path/to/your/workspace
 git clone https://github.com/leadbrain/open-claude .claude/plugins/open-claude
 .claude/plugins/open-claude/setup.sh
 ```
 
-The setup script will:
-- Ask for your bot token and main channel ID
-- Install dependencies (bun)
-- Register the MCP server in `.mcp.json`
-- Symlink hooks to `.claude/hooks/`
-- Configure `settings.json` with hook registrations
-- Create `memory/threads/` and `memory/events/` directories
-
 ### 3. Start Claude Code
 
 ```bash
-cd /path/to/your/workspace
-claude
+claude   # MCP server + hooks load automatically via plugin system
 ```
 
-The MCP server starts automatically when Claude Code loads.
+### 4. Pair your Discord account
+
+1. DM the bot on Discord — you'll get a pairing code
+2. In Claude Code: `/open-claude:access pair <code>`
+3. Done! Send messages in your main channel or threads
 
 ## Configuration
 
-All config lives in `~/.claude/channels/discord/.env`:
+Run `/open-claude:configure` in Claude Code, or edit `~/.claude/channels/discord/.env` directly:
 
 ```bash
 # Required
@@ -102,98 +111,77 @@ DISCORD_LOG_THREAD=123456789       # Thread for cron job log copies
 DISCORD_THREAD_MODEL=sonnet        # Model for thread sessions (default: sonnet)
 DISCORD_EVENT_LOG=true             # Enable cross-session event logging
 DISCORD_PERMISSION_CHANNEL=123     # Channel for permission notifications
-DISCORD_ACCESS_MODE=static         # Lock access config at boot (no runtime changes)
+DISCORD_ACCESS_MODE=static         # Lock access config at boot
 ```
 
 ## Access control
 
-Access is managed via `~/.claude/channels/discord/access.json`:
+Run `/open-claude:access` for interactive management, or see [ACCESS.md](ACCESS.md) for details.
 
-```json
-{
-  "dmPolicy": "pairing",
-  "allowFrom": ["discord-user-id"],
-  "groups": {
-    "channel-id": {
-      "requireMention": true,
-      "allowFrom": []
-    }
-  }
-}
-```
-
-**DM Policies:**
-- `pairing` (default): Unknown users get a pairing code to approve
-- `allowlist`: Only users in `allowFrom` can DM
-- `disabled`: DMs blocked entirely
-
-**Guild channels:**
-- Add channel ID to `groups` to opt in
-- `requireMention: true` — bot only responds when @mentioned or replied to
-- `allowFrom: []` — empty means anyone in the channel; add user IDs to restrict
-
-**Delivery settings** (optional in access.json):
-- `ackReaction`: Emoji to react with on receipt (e.g., `"👀"`)
-- `replyToMode`: `"first"` (default), `"all"`, or `"off"`
-- `textChunkLimit`: Max chars per message (default/max: 2000)
-- `chunkMode`: `"length"` (hard cut) or `"newline"` (prefer paragraph boundaries)
+Quick reference:
+- **Pair a user**: `/open-claude:access pair <code>`
+- **Add to allowlist**: `/open-claude:access allow <user-id>`
+- **Add a channel**: `/open-claude:access group add <channel-id>`
+- **Check status**: `/open-claude:access status`
 
 ## Cron jobs
 
 Run skills on a schedule and send results to a Discord thread:
 
 ```bash
-# Usage
 .claude/plugins/open-claude/scripts/cron-runner.sh <skill> <thread-id> [model] [timeout]
+```
 
-# Example crontab entry
+Example crontab:
+```
 30 7 * * * /path/to/workspace/.claude/plugins/open-claude/scripts/cron-runner.sh weather-briefing 1485223225737613362 haiku 120
 ```
 
-The cron runner:
-1. Looks up existing session for the thread (resumes if found)
-2. Runs the skill via `claude -p`
-3. Stop hook routes the response to the Discord thread
-4. Falls back to direct curl if no session to resume
-
-## File structure
+## Plugin structure
 
 ```
-.claude/plugins/open-claude/    # Plugin code (this repo)
-├── server.ts                   # MCP server
-├── hooks/                      # Hook scripts
-│   ├── auto-reply.sh           # Stop hook — send response to Discord
-│   ├── track-channel.sh        # Submit hook — session tracking + typing
-│   └── typing-loop.sh          # Background typing indicator
+open-claude/
+├── .claude-plugin/
+│   └── plugin.json         # Plugin metadata
+├── .mcp.json               # MCP server config (auto-loaded)
+├── hooks/
+│   ├── hooks.json          # Hook registrations (auto-loaded)
+│   ├── auto-reply.sh       # Stop hook — send response to Discord
+│   ├── track-channel.sh    # Submit hook — session tracking + typing
+│   └── typing-loop.sh      # Background typing indicator
+├── skills/
+│   ├── configure/SKILL.md  # /open-claude:configure
+│   └── access/SKILL.md     # /open-claude:access
 ├── scripts/
-│   └── cron-runner.sh          # Cron job executor
-├── setup.sh                    # Installer
+│   └── cron-runner.sh      # Cron job executor
+├── server.ts               # MCP server
 ├── package.json
-└── README.md
+├── setup.sh                # Optional manual setup
+├── README.md
+├── ACCESS.md
+└── LICENSE
+```
 
-memory/                         # Runtime state (in workspace root)
-├── threads/{chat_id}.json      # Session ↔ channel mapping
-└── events/{date}.md            # Cross-session event log (optional)
-
-~/.claude/channels/discord/     # User-local config
-├── .env                        # Bot token, workspace path, options
-├── access.json                 # Access control rules
-├── inbox/                      # Downloaded attachments
-└── dedup/                      # Message dedup locks
+Runtime state (in your workspace):
+```
+memory/
+├── threads/{chat_id}.json  # Session ↔ channel mapping
+└── events/{date}.md        # Cross-session event log (optional)
 ```
 
 ## Troubleshooting
 
-- **Debug log**: `/tmp/open-claude-debug.log` (Stop hook)
-- **Typing PID**: `/tmp/open-claude-typing.pid`
-- **Cron logs**: `/tmp/open-claude-cron/<skill>-<timestamp>.log`
-- **MCP server**: stderr goes to Claude Code's MCP log
+| Issue | Check |
+|-------|-------|
+| No response in Discord | Plugin enabled? `claude plugins list` |
+| Typing never stops | `/tmp/open-claude-typing.pid` — PID still alive? |
+| Thread not responding | `DISCORD_WORKSPACE` correct in `.env`? |
+| Permission errors | `~/.claude/channels/discord/` mode 700? |
 
-Common issues:
-- **No response in Discord**: Check that Stop hook is registered in `settings.json`
-- **Typing never stops**: Check if `auto-reply.sh` is killing the typing PID
-- **Thread not responding**: Verify `DISCORD_WORKSPACE` points to the right directory
-- **Permission errors**: Ensure `~/.claude/channels/discord/` has mode 700
+Debug logs:
+- Stop hook: `/tmp/open-claude-debug.log`
+- Cron: `/tmp/open-claude-cron/<skill>-<timestamp>.log`
+- MCP: Claude Code's MCP stderr
 
 ## License
 
