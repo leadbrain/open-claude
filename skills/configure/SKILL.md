@@ -1,17 +1,18 @@
 ---
 name: configure
-description: Set up the Discord channel — save the bot token and configure options. Use when the user pastes a Discord bot token, asks to configure Discord, or wants to check channel status.
+description: View or update Discord channel configuration. Use when the user wants to check status, change settings, or update the bot token.
 user-invocable: true
 allowed-tools:
   - Read
   - Write
   - Bash(ls *)
   - Bash(mkdir *)
+  - Bash(chmod *)
 ---
 
-# /open-claude:configure — Discord Channel Setup
+# /open-claude:configure — View & Update Configuration
 
-Writes the bot token and config to `~/.claude/channels/discord/.env` and orients the user on access policy.
+Quick configuration management. For first-time setup, suggest `/open-claude:setup` instead.
 
 Arguments passed: `$ARGUMENTS`
 
@@ -19,66 +20,65 @@ Arguments passed: `$ARGUMENTS`
 
 ## Dispatch on arguments
 
-### No args — status and guidance
+### No args — show status
 
-Read both state files and give the user a complete picture:
+Read `~/.claude/channels/discord/.env` and `~/.claude/channels/discord/access.json`.
 
-1. **Token** — check `~/.claude/channels/discord/.env` for `DISCORD_BOT_TOKEN`. Show set/not-set; if set, show first 6 chars masked.
+Show a concise status:
+- **Token**: set/not set (mask: first 6 chars + `...`)
+- **Main channel**: ID or "not set"
+- **Workspace**: path or "not set"
+- **Optional settings**: only show if set (tmux session, event log, thread model, log thread)
+- **Access**: DM policy, allowlist count, group count
 
-2. **Config** — show current settings:
-   - `DISCORD_MAIN_CHANNEL` — main channel ID
-   - `DISCORD_WORKSPACE` — workspace path
-   - `DISCORD_TMUX_SESSION` — tmux session name (optional)
-   - `DISCORD_THREAD_MODEL` — model for thread sessions (default: sonnet)
-   - `DISCORD_EVENT_LOG` — cross-session event logging (true/false)
-   - `DISCORD_LOG_THREAD` — log thread for cron jobs (optional)
+If no .env exists, say:
+> No configuration found. Run `/open-claude:setup` for guided first-time setup.
 
-3. **Access** — read `~/.claude/channels/discord/access.json` (missing file = defaults). Show DM policy, allowlist count, group count.
+### `token <value>` — update bot token
 
-4. **Next steps** — tell the user what to do next.
+1. Read existing .env (or create new)
+2. Replace DISCORD_BOT_TOKEN line
+3. Write with mode 600
+4. Confirm (masked)
 
-### Token provided — save it
+### `main_channel <id>` — update main channel
 
-If `$ARGUMENTS` looks like a Discord bot token (starts with letters, has dots):
-
-1. Create `~/.claude/channels/discord/` with mode 700 if missing
-2. Write or update `.env`:
-   ```
-   DISCORD_BOT_TOKEN=<token>
-   DISCORD_MAIN_CHANNEL=<ask if not set>
-   DISCORD_WORKSPACE=<current workspace>
-   ```
-3. Set file mode 600
-4. Tell the user to restart Claude Code to connect
-
-### Setting a specific option
-
-If `$ARGUMENTS` is like `main_channel 123456` or `tmux_session claude`:
-
-1. Read existing `.env`
-2. Update the relevant variable
-3. Write back
+1. Read existing .env
+2. Replace DISCORD_MAIN_CHANNEL line
+3. Write
 4. Confirm
 
-## Environment file format
+### `workspace <path>` — update workspace path
 
-```bash
-# Required
-DISCORD_BOT_TOKEN=MTIz...
-DISCORD_MAIN_CHANNEL=123456789
-DISCORD_WORKSPACE=/path/to/workspace
+1. Read existing .env
+2. Replace DISCORD_WORKSPACE line
+3. Write
+4. Confirm
 
-# Optional
-DISCORD_TMUX_SESSION=claude
-DISCORD_LOG_THREAD=123456789
-DISCORD_THREAD_MODEL=sonnet
-DISCORD_EVENT_LOG=true
-DISCORD_PERMISSION_CHANNEL=123456789
-```
+### `<key> <value>` — set any optional setting
+
+Supported keys: `tmux_session`, `thread_model`, `event_log`, `log_thread`, `permission_channel`
+
+Maps to env vars:
+- `tmux_session` → `DISCORD_TMUX_SESSION`
+- `thread_model` → `DISCORD_THREAD_MODEL`
+- `event_log` → `DISCORD_EVENT_LOG`
+- `log_thread` → `DISCORD_LOG_THREAD`
+- `permission_channel` → `DISCORD_PERMISSION_CHANNEL`
+
+1. Read existing .env
+2. Add or update the line
+3. Write
+4. Confirm
+
+### `reset` — remove configuration
+
+1. Confirm with the user
+2. Delete `~/.claude/channels/discord/.env`
+3. Confirm
 
 ## Important
 
-- Never show the full bot token — mask all but first 6 chars
-- The `.env` file must have mode 600 (owner read/write only)
-- The directory must have mode 700
-- After any token change, tell the user to restart Claude Code
+- Never show the full bot token
+- Always preserve file permissions (600 for .env, 700 for directory)
+- After any change, remind: "Restart Claude Code to apply changes."
