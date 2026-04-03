@@ -9,6 +9,9 @@ INPUT=$(cat)
 LOG="/tmp/open-claude-track.log"
 
 echo "[$(date)] track-channel.sh fired" >> "$LOG"
+echo "[$(date)] RAW INPUT (first 500):" >> "$LOG"
+echo "${INPUT:0:500}" >> "$LOG"
+echo "[$(date)] --- END RAW ---" >> "$LOG"
 
 # Load config — project-local: .claude/discord.env in workspace
 WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
