@@ -87,8 +87,8 @@ Set `DISCORD_ACCESS_MODE=static` in `.env` to lock access config at boot time. C
 
 ## Security Notes
 
-- Bot token lives in `~/.claude/channels/discord/.env` with mode 600
-- State directory (`~/.claude/channels/discord/`) has mode 700
+- Bot token lives in `.claude/discord.env` (project-local) with mode 600
+- State directory (`.claude/discord/`) lives in the workspace
 - The bot refuses to send files from its own state directory (except `inbox/`)
 - Pairing codes are cryptographically random (6 hex chars = 24 bits)
 - Message deduplication prevents double-processing across MCP instances

@@ -56,7 +56,7 @@ If both are installed, say so and move on.
 
 ## Step 2: Check existing configuration
 
-Read `~/.claude/channels/discord/.env`. If it exists and has a token:
+Read `.claude/discord.env` (in the current workspace). If it exists and has a token:
 - Show status (mask the token: first 6 chars + `...`)
 - Ask: "Already configured! Want to reconfigure, or skip to pairing?"
 - If skip → jump to Step 5

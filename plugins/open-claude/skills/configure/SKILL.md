@@ -74,7 +74,7 @@ Maps to env vars:
 ### `reset` — remove configuration
 
 1. Confirm with the user
-2. Delete `~/.claude/channels/discord/.env`
+2. Delete `.claude/discord.env`
 3. Confirm
 
 ## Important

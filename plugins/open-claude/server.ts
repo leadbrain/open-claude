@@ -5,7 +5,7 @@
  * Self-contained MCP server with access control: pairing, allowlists,
  * guild-channel support with mention-triggering.
  *
- * State lives in ~/.claude/channels/discord/access.json.
+ * State lives in .claude/discord/access.json (project-local).
  *
  * Install: .claude/plugins/open-claude/setup.sh
  */
