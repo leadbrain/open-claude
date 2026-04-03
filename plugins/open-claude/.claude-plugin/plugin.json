@@ -1,7 +1,7 @@
 {
   "name": "open-claude",
   "description": "Discord channel for Claude Code — messaging bridge with access control, thread sessions, typing indicators, and cron support.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "keywords": [
     "discord",
     "messaging",
