@@ -6,6 +6,9 @@
 # 3. Starts typing indicator loop
 
 INPUT=$(cat)
+LOG="/tmp/open-claude-track.log"
+
+echo "[$(date)] track-channel.sh fired" >> "$LOG"
 
 # Load config
 ENV_FILE="$HOME/.claude/channels/discord/.env"
@@ -13,19 +16,29 @@ MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 WORKSPACE="${DISCORD_WORKSPACE:-}"
 EVENT_LOG="${DISCORD_EVENT_LOG:-}"
 
+echo "[$(date)] ENV_FILE=$ENV_FILE exists=$([ -f "$ENV_FILE" ] && echo yes || echo no)" >> "$LOG"
+
 if [ -f "$ENV_FILE" ]; then
   [ -z "$MAIN_CHANNEL" ] && MAIN_CHANNEL=$(grep DISCORD_MAIN_CHANNEL "$ENV_FILE" | cut -d= -f2)
   [ -z "$WORKSPACE" ] && WORKSPACE=$(grep DISCORD_WORKSPACE "$ENV_FILE" | cut -d= -f2)
   [ -z "$EVENT_LOG" ] && EVENT_LOG=$(grep DISCORD_EVENT_LOG "$ENV_FILE" | cut -d= -f2)
 fi
 
+echo "[$(date)] WORKSPACE=$WORKSPACE MAIN_CHANNEL=$MAIN_CHANNEL" >> "$LOG"
+
 # Extract chat_id from prompt
 PROMPT_TEXT=$(echo "$INPUT" | jq -r '(.user_prompt // .prompt // "")' 2>/dev/null)
 CHAT_ID=$(echo "$PROMPT_TEXT" | sed -n 's/.*chat_id="\([^"]*\)".*/\1/p' | head -1)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 
+echo "[$(date)] CHAT_ID=$CHAT_ID SESSION_ID=$SESSION_ID" >> "$LOG"
+echo "[$(date)] PROMPT_TEXT (first 200): ${PROMPT_TEXT:0:200}" >> "$LOG"
+
 # Not a Discord message? Skip.
-[ -z "$CHAT_ID" ] && exit 0
+if [ -z "$CHAT_ID" ]; then
+  echo "[$(date)] No chat_id found, exiting" >> "$LOG"
+  exit 0
+fi
 
 # Record session_id → chat_id mapping
 if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
@@ -34,6 +47,9 @@ if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
   THREAD_FILE="$THREADS_DIR/${CHAT_ID}.json"
   jq -n --arg sid "$SESSION_ID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
     '{session_id: $sid, last_active: $ts}' > "$THREAD_FILE"
+  echo "[$(date)] Wrote $THREAD_FILE (sid=$SESSION_ID)" >> "$LOG"
+else
+  echo "[$(date)] SKIP write: SESSION_ID=$SESSION_ID WORKSPACE=$WORKSPACE" >> "$LOG"
 fi
 
 # ── Cross-session event injection (optional) ──
