@@ -10,17 +10,16 @@ LOG="/tmp/open-claude-track.log"
 
 echo "[$(date)] track-channel.sh fired" >> "$LOG"
 
-# Load config
-ENV_FILE="$HOME/.claude/channels/discord/.env"
+# Load config — project-local: .claude/discord.env in workspace (cwd)
+WORKSPACE="$(pwd)"
+ENV_FILE="$WORKSPACE/.claude/discord.env"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
-WORKSPACE="${DISCORD_WORKSPACE:-}"
 EVENT_LOG="${DISCORD_EVENT_LOG:-}"
 
 echo "[$(date)] ENV_FILE=$ENV_FILE exists=$([ -f "$ENV_FILE" ] && echo yes || echo no)" >> "$LOG"
 
 if [ -f "$ENV_FILE" ]; then
   [ -z "$MAIN_CHANNEL" ] && MAIN_CHANNEL=$(grep DISCORD_MAIN_CHANNEL "$ENV_FILE" | cut -d= -f2)
-  [ -z "$WORKSPACE" ] && WORKSPACE=$(grep DISCORD_WORKSPACE "$ENV_FILE" | cut -d= -f2)
   [ -z "$EVENT_LOG" ] && EVENT_LOG=$(grep DISCORD_EVENT_LOG "$ENV_FILE" | cut -d= -f2)
 fi
 

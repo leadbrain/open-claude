@@ -6,7 +6,7 @@
 
 CHANNEL_ID="$1"
 PID_FILE="/tmp/open-claude-typing.pid"
-TOKEN_FILE="$HOME/.claude/channels/discord/.env"
+TOKEN_FILE="$(pwd)/.claude/discord.env"
 
 if [ -z "$CHANNEL_ID" ]; then
   exit 1

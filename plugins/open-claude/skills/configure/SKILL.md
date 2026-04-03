@@ -22,7 +22,7 @@ Arguments passed: `$ARGUMENTS`
 
 ### No args — show status
 
-Read `~/.claude/channels/discord/.env` and `~/.claude/channels/discord/access.json`.
+Read `.claude/discord.env` and `.claude/discord/access.json` (project-local).
 
 Show a concise status:
 - **Token**: set/not set (mask: first 6 chars + `...`)

@@ -42,12 +42,15 @@ import { join, sep } from 'path'
 
 // ── Configuration ──
 
-const STATE_DIR = process.env.DISCORD_STATE_DIR ?? join(homedir(), '.claude', 'channels', 'discord')
+// Project-local config: .claude/discord.env in the workspace (cwd).
+// State (access, dedup, inbox) lives alongside the env file.
+const WORKSPACE = process.cwd()
+const ENV_FILE = join(WORKSPACE, '.claude', 'discord.env')
+const STATE_DIR = join(WORKSPACE, '.claude', 'discord')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
 const APPROVED_DIR = join(STATE_DIR, 'approved')
-const ENV_FILE = join(STATE_DIR, '.env')
 
-// Load ~/.claude/channels/discord/.env into process.env. Real env wins.
+// Load .claude/discord.env into process.env. Real env wins.
 try {
   chmodSync(ENV_FILE, 0o600)
   for (const line of readFileSync(ENV_FILE, 'utf8').split('\n')) {
@@ -58,14 +61,13 @@ try {
 
 const TOKEN = process.env.DISCORD_BOT_TOKEN
 const STATIC = process.env.DISCORD_ACCESS_MODE === 'static'
-const WORKSPACE = process.env.DISCORD_WORKSPACE ?? ''
 const TMUX_SESSION = process.env.DISCORD_TMUX_SESSION ?? ''
 
 if (!TOKEN) {
   process.stderr.write(
     `open-claude: DISCORD_BOT_TOKEN required\n` +
-    `  set in ${ENV_FILE}\n` +
-    `  format: DISCORD_BOT_TOKEN=MTIz...\n`,
+    `  Run /open-claude:setup to configure\n` +
+    `  Or create ${ENV_FILE} with DISCORD_BOT_TOKEN=MTIz...\n`,
   )
   process.exit(1)
 }

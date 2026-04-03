@@ -92,28 +92,28 @@ When the user provides a token:
    > To get a channel ID: right-click the channel in Discord → **Copy Channel ID**
    > (Enable Developer Mode in Discord Settings → App Settings → Advanced if you don't see this option)
 
-2. Once both are provided, create the config:
+2. Once both are provided, create the config in the **workspace** (project-local):
 
 ```bash
-mkdir -p ~/.claude/channels/discord
-chmod 700 ~/.claude/channels/discord
+mkdir -p .claude/discord
 ```
 
-Write `~/.claude/channels/discord/.env`:
+Write `.claude/discord.env`:
 ```
 DISCORD_BOT_TOKEN=<token>
 DISCORD_MAIN_CHANNEL=<channel_id>
-DISCORD_WORKSPACE=<current working directory>
 ```
 
 ```bash
-chmod 600 ~/.claude/channels/discord/.env
+chmod 600 .claude/discord.env
 ```
 
 Also create runtime directories:
 ```bash
 mkdir -p memory/threads memory/events
 ```
+
+Note: No `DISCORD_WORKSPACE` needed — the plugin uses `pwd` (current working directory) automatically.
 
 3. Confirm:
    > Configuration saved. Hooks are auto-registered by the plugin system — no manual setup needed.

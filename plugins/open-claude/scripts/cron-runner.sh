@@ -11,8 +11,9 @@ DISCORD_THREAD="${2:?Usage: cron-runner.sh <skill-name> <discord-thread-id> [mod
 MODEL="${3:-haiku}"
 TIMEOUT="${4:-}"
 
-# Load config
-DISCORD_ENV_FILE="$HOME/.claude/channels/discord/.env"
+# Load config — project-local: .claude/discord.env in workspace (cwd)
+WORKSPACE="$(pwd)"
+DISCORD_ENV_FILE="$WORKSPACE/.claude/discord.env"
 if [ -f "$DISCORD_ENV_FILE" ]; then
   while IFS='=' read -r key value; do
     [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
@@ -20,7 +21,6 @@ if [ -f "$DISCORD_ENV_FILE" ]; then
   done < "$DISCORD_ENV_FILE"
 fi
 
-WORKSPACE="${DISCORD_WORKSPACE:?Set DISCORD_WORKSPACE in $DISCORD_ENV_FILE}"
 DISCORD_TOKEN="${DISCORD_BOT_TOKEN:?Set DISCORD_BOT_TOKEN in $DISCORD_ENV_FILE}"
 LOG_DIR="/tmp/open-claude-cron"
 mkdir -p "$LOG_DIR"

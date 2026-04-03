@@ -34,18 +34,17 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
 echo "[$(date)] session_id=$SESSION_ID" >> "$LOG"
 
-# Load .env
-ENV_FILE="$HOME/.claude/channels/discord/.env"
+# Load .env — project-local: .claude/discord.env in workspace (cwd)
+WORKSPACE="$(pwd)"
+ENV_FILE="$WORKSPACE/.claude/discord.env"
 MAIN_CHANNEL=""
 LOG_THREAD=""
 BOT_TOKEN=""
-WORKSPACE=""
 EVENT_LOG=""
 if [ -f "$ENV_FILE" ]; then
   MAIN_CHANNEL=$(grep DISCORD_MAIN_CHANNEL "$ENV_FILE" | cut -d= -f2)
   LOG_THREAD=$(grep DISCORD_LOG_THREAD "$ENV_FILE" | cut -d= -f2)
   BOT_TOKEN=$(grep DISCORD_BOT_TOKEN "$ENV_FILE" | cut -d= -f2)
-  WORKSPACE=$(grep DISCORD_WORKSPACE "$ENV_FILE" | cut -d= -f2)
   EVENT_LOG=$(grep DISCORD_EVENT_LOG "$ENV_FILE" | cut -d= -f2)
 fi
 if [ -z "$BOT_TOKEN" ]; then
