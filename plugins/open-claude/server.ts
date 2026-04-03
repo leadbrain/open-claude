@@ -42,9 +42,17 @@ import { join, sep } from 'path'
 
 // ── Configuration ──
 
-// Project-local config: .claude/discord.env in the workspace (cwd).
-// State (access, dedup, inbox) lives alongside the env file.
-const WORKSPACE = process.cwd()
+// Project-local config: .claude/discord.env in the workspace.
+// OPEN_CLAUDE_WORKSPACE env var is set by .mcp.json or hooks.
+// Fallback: check common locations.
+const WORKSPACE = process.env.OPEN_CLAUDE_WORKSPACE || process.cwd()
+// Debug: log all env vars that might contain workspace info
+const debugEnv = Object.entries(process.env)
+  .filter(([k]) => /claude|workspace|project|pwd|cwd|home/i.test(k))
+  .map(([k, v]) => `${k}=${v}`)
+  .join(', ')
+process.stderr.write(`open-claude: workspace=${WORKSPACE} cwd=${process.cwd()}\n`)
+process.stderr.write(`open-claude: relevant env: ${debugEnv}\n`)
 const ENV_FILE = join(WORKSPACE, '.claude', 'discord.env')
 const STATE_DIR = join(WORKSPACE, '.claude', 'discord')
 const ACCESS_FILE = join(STATE_DIR, 'access.json')
