@@ -61,20 +61,20 @@ Stop Hook (auto-reply.sh)
 ### 2. Install and configure
 
 ```bash
-# Install
+# Install (project scope — tied to this workspace)
 claude plugins marketplace add leadbrain/open-claude
-claude plugins install open-claude@open-claude
+claude plugins install open-claude@open-claude --scope project
 
-# Configure (in Claude Code)
-/open-claude:configure <your-bot-token>
+# Restart Claude Code, then configure
+/open-claude:setup
 ```
 
 After install, **restart Claude Code** (exit and reopen) to load the plugin.
 
-Alternative — load from local directory:
+Alternative — load from local directory (for testing):
 ```bash
 git clone https://github.com/leadbrain/open-claude
-claude --plugin-dir ./open-claude
+claude --plugin-dir ./open-claude/plugins/open-claude
 ```
 
 ### 3. Pair your Discord account
