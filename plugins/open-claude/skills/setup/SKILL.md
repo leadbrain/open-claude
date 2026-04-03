@@ -116,51 +116,9 @@ mkdir -p memory/threads memory/events
 ```
 
 3. Confirm:
-   > Configuration saved.
+   > Configuration saved. Hooks are auto-registered by the plugin system — no manual setup needed.
 
-## Step 5: Register hooks
-
-After .env is saved, register the hooks in the **workspace** settings.json (`.claude/settings.json` in the workspace directory — NOT the user-level settings).
-
-Read the current `.claude/settings.json` in the workspace. If it doesn't exist, create it. Merge the following hook registrations, preserving any existing hooks:
-
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/track-channel.sh",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/auto-reply.sh",
-            "timeout": 30
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-**Important**: If the file already has hooks for other purposes, ADD these entries — don't replace the entire hooks object. If open-claude hooks are already registered (check for `auto-reply.sh` or `track-channel.sh` in existing commands), skip.
-
-After writing, confirm:
-> Hooks registered in .claude/settings.json.
-
-## Step 6: Pairing guide
+## Step 5: Pairing guide
 
 Tell the user:
 
@@ -175,7 +133,7 @@ Tell the user:
 >
 > To find your Discord user ID: enable Developer Mode → right-click your name → Copy User ID
 
-## Step 7: Optional settings
+## Step 6: Optional settings
 
 Ask if the user wants to configure any optional features:
 
@@ -188,7 +146,7 @@ Ask if the user wants to configure any optional features:
 
 If the user wants any, update the `.env` file accordingly.
 
-## Step 8: Restart prompt
+## Step 7: Restart prompt
 
 After all configuration is done, give a clear final message:
 
