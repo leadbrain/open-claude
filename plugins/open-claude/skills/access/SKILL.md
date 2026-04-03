@@ -108,15 +108,30 @@ File: `~/.claude/channels/discord/access.json`
 3. Save
 4. Confirm
 
-### `status` or no args
+### No args — interactive mode
 
 1. Read `access.json`
-2. Show:
+2. Show current status:
    - DM policy
    - Allowlist (user IDs)
    - Groups (channel IDs, policies)
    - Pending pairings (codes, expiry times)
    - Delivery settings
+3. If there are pending pairings, ask:
+   > There are pending pairing requests. Want to approve one? Paste the pairing code:
+4. Wait for the user's input. If they provide a code, process it as a `pair` command.
+5. If no pending pairings, offer options:
+   > What would you like to do?
+   > - **Add user**: paste a Discord user ID to add to allowlist
+   > - **Add channel**: paste a channel ID to add a guild channel
+   > - **Change policy**: set DM policy (pairing/allowlist/disabled)
+   > - Or just type a command like `pair <code>`, `allow <id>`, `group add <id>`
+
+### `status` — show status only (no interactive prompt)
+
+1. Read `access.json`
+2. Show status (same as above)
+3. Done — no prompting
 
 ### `set <key> <value>` — delivery settings
 

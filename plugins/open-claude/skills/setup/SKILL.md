@@ -9,6 +9,11 @@ allowed-tools:
   - Bash(mkdir *)
   - Bash(chmod *)
   - Bash(bun *)
+  - Bash(which *)
+  - Bash(source *)
+  - Bash(echo *)
+  - Bash(grep *)
+  - Bash(cat *)
 ---
 
 # /open-claude:setup — Interactive Setup Wizard
@@ -21,15 +26,31 @@ Arguments passed: `$ARGUMENTS`
 
 ## Step 1: Check prerequisites
 
-Check if `bun` and `jq` are installed:
+Check if `bun` and `jq` are available in PATH:
 ```bash
-bun --version
-jq --version
+which bun
+which jq
 ```
 
-If missing, tell the user how to install:
-- **bun**: `curl -fsSL https://bun.sh/install | bash`
-- **jq**: `brew install jq` (macOS) or `apt install jq` (Linux)
+If `bun` is not found:
+1. Check if it's installed but not in PATH:
+   ```bash
+   ls ~/.bun/bin/bun 2>/dev/null || ls /usr/local/bin/bun 2>/dev/null
+   ```
+2. If found but not in PATH, add it:
+   ```bash
+   echo 'export BUN_INSTALL="$HOME/.bun"' >> ~/.zshrc
+   echo 'export PATH="$BUN_INSTALL/bin:$PATH"' >> ~/.zshrc
+   source ~/.zshrc
+   ```
+   Then verify: `bun --version`
+3. If not installed at all, tell the user:
+   > Run this in your terminal: `curl -fsSL https://bun.sh/install | bash`
+   > Then restart Claude Code (the shell needs to pick up the new PATH).
+
+If `jq` is not found:
+- **macOS**: `brew install jq`
+- **Linux**: `apt install jq` or `yum install jq`
 
 If both are installed, say so and move on.
 
