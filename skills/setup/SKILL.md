@@ -125,6 +125,21 @@ Ask if the user wants to configure any optional features:
 
 If the user wants any, update the `.env` file accordingly.
 
+## Step 7: Restart prompt
+
+After all configuration is done, give a clear final message:
+
+> **All set! Restart Claude Code to activate the Discord connection.**
+>
+> Exit this session (`Ctrl+C` or type `exit`), then run `claude` again.
+>
+> After restart:
+> 1. The bot will appear online in Discord
+> 2. DM the bot to get a pairing code
+> 3. Run `/open-claude:access pair <code>` to connect your account
+
+This is the LAST step. Do not continue the conversation after this — the user needs to restart for the plugin to load the MCP server and hooks.
+
 ## Important
 
 - Always mask tokens (show only first 6 chars)
