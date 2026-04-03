@@ -34,8 +34,8 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
 echo "[$(date)] session_id=$SESSION_ID" >> "$LOG"
 
-# Load .env — project-local: .claude/discord.env in workspace (cwd)
-WORKSPACE="$(pwd)"
+# Load .env — project-local: .claude/discord.env in workspace
+WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
 ENV_FILE="$WORKSPACE/.claude/discord.env"
 MAIN_CHANNEL=""
 LOG_THREAD=""

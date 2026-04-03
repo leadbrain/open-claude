@@ -10,8 +10,8 @@ LOG="/tmp/open-claude-track.log"
 
 echo "[$(date)] track-channel.sh fired" >> "$LOG"
 
-# Load config — project-local: .claude/discord.env in workspace (cwd)
-WORKSPACE="$(pwd)"
+# Load config — project-local: .claude/discord.env in workspace
+WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
 ENV_FILE="$WORKSPACE/.claude/discord.env"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 EVENT_LOG="${DISCORD_EVENT_LOG:-}"

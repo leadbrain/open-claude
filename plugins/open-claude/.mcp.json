@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "open-claude": {
-      "command": "bun",
-      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--shell=bun", "--silent", "start"]
+      "command": "bash",
+      "args": ["-c", "OPEN_CLAUDE_WORKSPACE=\"$(pwd)\" && cd \"${CLAUDE_PLUGIN_ROOT}\" && bun install --no-summary 2>/dev/null && exec bun server.ts"]
     }
   }
 }
