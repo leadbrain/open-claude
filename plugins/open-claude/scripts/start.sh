@@ -17,7 +17,7 @@ fi
 
 echo "Starting open-claude..."
 tmux new-session -d -s "$SESSION_NAME" \
-  "cd '$(pwd)' && claude --dangerously-load-development-channels plugin:open-claude@open-claude"
+  "cd '$(pwd)' && claude --dangerously-load-development-channels server:open-claude"
 
 echo "open-claude started in tmux session '$SESSION_NAME'."
 echo ""
