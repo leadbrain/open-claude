@@ -9,7 +9,7 @@ INPUT=$(cat)
 
 # Config from environment (set via .mcp.json env field)
 # Hooks run in workspace cwd, so pwd = workspace
-WORKSPACE="$(pwd)"
+WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 EVENT_LOG="${DISCORD_EVENT_LOG:-}"
 

@@ -26,7 +26,7 @@ SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
 
 # Config from environment
-WORKSPACE="$(pwd)"
+WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 LOG_THREAD="${DISCORD_LOG_THREAD:-}"
 BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"
