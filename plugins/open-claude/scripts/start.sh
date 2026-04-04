@@ -16,8 +16,21 @@ if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
 fi
 
 echo "Starting open-claude..."
+
+# Export DISCORD_ env vars from .mcp.json so hooks can access them
+WORKSPACE="$(pwd)"
+ENV_EXPORTS=$(python3 -c "
+import json, os
+try:
+    d = json.load(open('$WORKSPACE/.mcp.json'))
+    env = d.get('mcpServers', {}).get('open-claude', {}).get('env', {})
+    for k, v in env.items():
+        print(f\"export {k}='{v}'\")
+except: pass
+" 2>/dev/null)
+
 tmux new-session -d -s "$SESSION_NAME" \
-  "cd '$(pwd)' && claude --dangerously-load-development-channels server:open-claude"
+  "cd '$WORKSPACE' && $ENV_EXPORTS && claude --dangerously-load-development-channels server:open-claude"
 
 echo "open-claude started in tmux session '$SESSION_NAME'."
 echo ""

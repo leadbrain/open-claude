@@ -884,7 +884,12 @@ async function handleInbound(msg: Message): Promise<void> {
         const promptFile = join(WORKSPACE, '.claude', 'discord', `prompt-${chat_id}.txt`)
         writeFileSync(promptFile, firstPrompt)
 
-        const cmd = `cd '${WORKSPACE}' && export DISCORD_THREAD_CHANNEL=${chat_id} && claude --dangerously-load-development-channels server:open-claude --model ${threadModel} ${resumeArg} "$(cat '${promptFile}')" && rm -f '${promptFile}'`
+        // Export all DISCORD_ env vars so hooks can access them (hooks don't get .mcp.json env)
+        const envExports = Object.entries(process.env)
+          .filter(([k]) => k.startsWith('DISCORD_') || k === 'OPEN_CLAUDE_WORKSPACE')
+          .map(([k, v]) => `export ${k}='${(v ?? '').replace(/'/g, "'\\''")}'`)
+          .join(' && ')
+        const cmd = `cd '${WORKSPACE}' && export DISCORD_THREAD_CHANNEL=${chat_id} && ${envExports} && claude --dangerously-load-development-channels server:open-claude --model ${threadModel} ${resumeArg} "$(cat '${promptFile}')" && rm -f '${promptFile}'`
         execSync(`tmux new-window -t ${tmuxSession} -n ${windowName} '${cmd.replace(/'/g, "'\\''")}'`, { timeout: 5000 })
         // Auto-approve the development channels prompt
         setTimeout(() => {
