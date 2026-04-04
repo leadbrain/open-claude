@@ -871,14 +871,24 @@ async function handleInbound(msg: Message): Promise<void> {
       const threadModel = process.env.DISCORD_THREAD_MODEL ?? 'sonnet'
 
       try {
-        // Create tmux window with Claude session — set DISCORD_THREAD_CHANNEL so it only handles this thread
-        const cmd = `cd '${WORKSPACE}' && export DISCORD_THREAD_CHANNEL=${chat_id} && claude --dangerously-load-development-channels server:open-claude --model ${threadModel} ${resumeArg}`
+        // Create tmux window with Claude session + first message as argument
+        const userMsg = msg.content || '(empty)'
+        const userName = msg.author.username
+        const userId = msg.author.id
+        const ts = msg.createdAt.toISOString()
+        const firstPrompt = `<channel source="discord" chat_id="${chat_id}" message_id="${msg.id}" user="${userName}" user_id="${userId}" ts="${ts}">\n${userMsg}\n</channel>`
+
+        // Write first prompt to file (avoids shell escaping issues)
+        const promptFile = join(WORKSPACE, '.claude', 'discord', `prompt-${chat_id}.txt`)
+        writeFileSync(promptFile, firstPrompt)
+
+        const cmd = `cd '${WORKSPACE}' && export DISCORD_THREAD_CHANNEL=${chat_id} && claude --dangerously-load-development-channels server:open-claude --model ${threadModel} ${resumeArg} "$(cat '${promptFile}')" && rm -f '${promptFile}'`
         execSync(`tmux new-window -t ${tmuxSession} -n ${windowName} '${cmd.replace(/'/g, "'\\''")}'`, { timeout: 5000 })
         // Auto-approve the development channels prompt
         setTimeout(() => {
           try { execSync(`tmux send-keys -t ${tmuxSession}:${windowName} Enter`, { timeout: 3000 }) } catch {}
         }, 3000)
-        process.stderr.write(`open-claude: thread ${chat_id} — tmux window created\n`)
+        process.stderr.write(`open-claude: thread ${chat_id} — tmux window created with first message\n`)
       } catch (err) {
         process.stderr.write(`open-claude: thread tmux error: ${err}\n`)
         if ('send' in msg.channel) {
