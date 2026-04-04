@@ -123,7 +123,7 @@ function assertSendable(f: string): void {
   let real: string, stateReal: string
   try {
     real = realpathSync(f)
-    stateReal = realpathSync(DATA_DIR)
+    stateReal = realpathSync(STATE_DIR)
   } catch { return }
   const inbox = join(stateReal, 'inbox')
   if (real.startsWith(stateReal + sep) && !real.startsWith(inbox + sep)) {
@@ -172,7 +172,7 @@ function loadAccess(): Access {
 
 function saveAccess(a: Access): void {
   if (STATIC) return
-  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
+  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
   const tmp = ACCESS_FILE + '.tmp'
   writeFileSync(tmp, JSON.stringify(a, null, 2) + '\n', { mode: 0o600 })
   renameSync(tmp, ACCESS_FILE)
@@ -831,7 +831,7 @@ async function handleInbound(msg: Message): Promise<void> {
   const chat_id = msg.channelId
 
   // Message dedup across MCP instances
-  const DEDUP_DIR = join(DATA_DIR, 'dedup')
+  const DEDUP_DIR = join(STATE_DIR, 'dedup')
   mkdirSync(DEDUP_DIR, { recursive: true })
   const dedupFile = join(DEDUP_DIR, `${msg.id}.lock`)
   try {
