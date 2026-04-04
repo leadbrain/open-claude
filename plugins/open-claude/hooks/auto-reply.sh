@@ -86,14 +86,17 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
     # Extract text responses
     TRANSCRIPT_TEXT=$(tail -n +"$LAST_USER_LINE" "$TRANSCRIPT" | jq -s '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | join("\n\n")' -r 2>/dev/null)
 
-    # Extract Edit tool diffs as ANSI-colored blocks
+    # Extract Edit diffs from structuredPatch (in tool_result user messages)
     EDIT_DIFFS=$(tail -n +"$LAST_USER_LINE" "$TRANSCRIPT" | jq -s '
-      [.[] | select(.type == "assistant") | .message.content[]? |
-       select(.type == "tool_use" and .name == "Edit") |
-       "\n\u001b[1;34m📝 " + (.input.file_path | split("/") | last) + "\u001b[0m\n```ansi\n" +
-       (.input.old_string | split("\n") | map("\u001b[0;31m- " + . + "\u001b[0m") | join("\n")) +
-       "\n" +
-       (.input.new_string | split("\n") | map("\u001b[0;32m+ " + . + "\u001b[0m") | join("\n")) +
+      [.[] | select(.type == "user" and .toolUseResult.structuredPatch) |
+       .toolUseResult |
+       "\n📝 " + (.filePath | split("/") | last) + "\n```ansi\n" +
+       ([.structuredPatch[].lines[] |
+         if startswith("-") then "\u001b[0;31m" + . + "\u001b[0m"
+         elif startswith("+") then "\u001b[0;32m" + . + "\u001b[0m"
+         else .
+         end
+       ] | join("\n")) +
        "\n```"
       ] | join("\n")' -r 2>/dev/null)
 
