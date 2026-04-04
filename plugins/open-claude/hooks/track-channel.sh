@@ -7,18 +7,11 @@
 
 INPUT=$(cat)
 
-# Load config from CLAUDE_PLUGIN_DATA (set by plugin system)
-# Fallback: .claude/discord.env in workspace
-DATA_DIR="${CLAUDE_PLUGIN_DATA:-$(pwd)/.claude/discord}"
-ENV_FILE="$DATA_DIR/discord.env"
-WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
+# Config from environment (set via .mcp.json env field)
+# Hooks run in workspace cwd, so pwd = workspace
+WORKSPACE="$(pwd)"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 EVENT_LOG="${DISCORD_EVENT_LOG:-}"
-
-if [ -f "$ENV_FILE" ]; then
-  [ -z "$MAIN_CHANNEL" ] && MAIN_CHANNEL=$(grep DISCORD_MAIN_CHANNEL "$ENV_FILE" | cut -d= -f2)
-  [ -z "$EVENT_LOG" ] && EVENT_LOG=$(grep DISCORD_EVENT_LOG "$ENV_FILE" | cut -d= -f2)
-fi
 
 # Extract chat_id from prompt
 PROMPT_TEXT=$(echo "$INPUT" | jq -r '(.user_prompt // .prompt // "")' 2>/dev/null)

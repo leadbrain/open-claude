@@ -92,36 +92,45 @@ When the user provides a token:
    > To get a channel ID: right-click the channel in Discord → **Copy Channel ID**
    > (Enable Developer Mode in Discord Settings → App Settings → Advanced if you don't see this option)
 
-2. Once both are provided, save the config to **CLAUDE_PLUGIN_DATA** (persistent plugin directory):
+2. Once both are provided, add the config to the **workspace `.mcp.json`** as environment variables.
 
-```bash
-# CLAUDE_PLUGIN_DATA is set by the plugin system. Check it:
-echo $CLAUDE_PLUGIN_DATA
-# If empty, use fallback: .claude/discord/
+Read the existing `.mcp.json` in the workspace root. If it doesn't exist, create it. Add the `env` field to the open-claude MCP server entry:
+
+```json
+{
+  "mcpServers": {
+    "open-claude": {
+      "command": "bun",
+      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--silent", "start"],
+      "env": {
+        "DISCORD_BOT_TOKEN": "<token>",
+        "DISCORD_MAIN_CHANNEL": "<channel_id>",
+        "OPEN_CLAUDE_WORKSPACE": "<workspace path (pwd)>"
+      }
+    }
+  }
+}
 ```
 
-Write `$CLAUDE_PLUGIN_DATA/discord.env` (or `.claude/discord/discord.env` if CLAUDE_PLUGIN_DATA is not set):
-```
-DISCORD_BOT_TOKEN=<token>
-DISCORD_MAIN_CHANNEL=<channel_id>
-```
-
-```bash
-chmod 600 $CLAUDE_PLUGIN_DATA/discord.env
-```
+**Important**: If `.mcp.json` already exists with other MCP servers, MERGE — don't overwrite. Only add/update the `open-claude` entry.
 
 Also create runtime directories:
 ```bash
-mkdir -p memory/threads memory/events
+mkdir -p .claude/discord memory/threads memory/events
 ```
 
-3. Copy `start.sh` to the workspace for convenience:
+3. Add `.mcp.json` to `.gitignore` (contains token):
+```bash
+echo '.mcp.json' >> .gitignore
+```
+
+4. Copy `start.sh` to the workspace:
 ```bash
 cp ${CLAUDE_PLUGIN_ROOT}/scripts/start.sh ./start.sh
 chmod +x ./start.sh
 ```
 
-4. Confirm:
+5. Confirm:
    > Configuration saved!
 
 ## Step 5: Launch guide

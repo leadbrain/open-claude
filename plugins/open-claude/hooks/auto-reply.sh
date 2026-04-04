@@ -1,14 +1,10 @@
 #!/bin/bash
 # auto-reply.sh — Stop hook: send Claude's response to Discord
 #
-# Routing: session_id → memory/threads/{chat_id}.json (no transcript parsing)
-#   1. Reverse-lookup session_id in memory/threads/*.json
-#   2. Fallback to DISCORD_LOG_THREAD (for cron jobs)
-#
-# Optional: event logging (set DISCORD_EVENT_LOG=true in discord.env)
+# Routing: session_id → memory/threads/{chat_id}.json
+# Config from environment variables (set via .mcp.json env field)
 
 INPUT=$(cat)
-LOG="/tmp/open-claude-debug.log"
 
 # Re-entry guard
 if [ "$CLAUDE_HOOK_NOREENTRY" = "1" ]; then
@@ -29,21 +25,13 @@ fi
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
 
-# Load config from CLAUDE_PLUGIN_DATA
-DATA_DIR="${CLAUDE_PLUGIN_DATA:-$(pwd)/.claude/discord}"
-ENV_FILE="$DATA_DIR/discord.env"
-WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
-MAIN_CHANNEL=""
-LOG_THREAD=""
-BOT_TOKEN=""
-EVENT_LOG=""
+# Config from environment
+WORKSPACE="$(pwd)"
+MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
+LOG_THREAD="${DISCORD_LOG_THREAD:-}"
+BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"
+EVENT_LOG="${DISCORD_EVENT_LOG:-}"
 
-if [ -f "$ENV_FILE" ]; then
-  MAIN_CHANNEL=$(grep DISCORD_MAIN_CHANNEL "$ENV_FILE" | cut -d= -f2)
-  LOG_THREAD=$(grep DISCORD_LOG_THREAD "$ENV_FILE" | cut -d= -f2)
-  BOT_TOKEN=$(grep DISCORD_BOT_TOKEN "$ENV_FILE" | cut -d= -f2)
-  EVENT_LOG=$(grep DISCORD_EVENT_LOG "$ENV_FILE" | cut -d= -f2)
-fi
 if [ -z "$BOT_TOKEN" ]; then
   exit 0
 fi
@@ -53,7 +41,6 @@ fi
 CHAT_ID=""
 ROUTE_SOURCE=""
 
-# Reverse-lookup session_id in memory/threads/*.json
 if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
   THREADS_DIR="$WORKSPACE/memory/threads"
   if [ -d "$THREADS_DIR" ]; then
@@ -73,7 +60,7 @@ if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
   fi
 fi
 
-# Fallback: log thread (cron jobs)
+# Fallback: log thread
 if [ -z "$CHAT_ID" ]; then
   if [ -n "$LOG_THREAD" ]; then
     CHAT_ID="$LOG_THREAD"
@@ -102,7 +89,6 @@ fi
 
 LAST_MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // empty' 2>/dev/null)
 
-# Merge: transcript + last_assistant_message (deduplicated)
 if [ -n "$TRANSCRIPT_TEXT" ] && [ -n "$LAST_MSG" ]; then
   if [ "${TRANSCRIPT_TEXT: -${#LAST_MSG}}" = "$LAST_MSG" ]; then
     RESPONSE="$TRANSCRIPT_TEXT"
@@ -125,7 +111,6 @@ fi
 
 if [ "$EVENT_LOG" = "true" ]; then
   record_event() {
-    [ -z "$WORKSPACE" ] && return
     EVENTS_DIR="$WORKSPACE/memory/events"
     mkdir -p "$EVENTS_DIR"
     TODAY=$(date +%Y-%m-%d)
@@ -151,7 +136,7 @@ fi
 
 send_message() {
   local text="$1"
-  curl -s -w "\nHTTP_CODE:%{http_code}" -X POST \
+  curl -s -X POST \
     "https://discord.com/api/v10/channels/${CHAT_ID}/messages" \
     -H "Authorization: Bot ${BOT_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -171,13 +156,12 @@ else
   done
 fi
 
-# Cron job: copy to log thread
+# Cron: copy to log thread
 CRON_MARKER="/tmp/cron-marker-${SESSION_ID}"
 if [ -f "$CRON_MARKER" ] && [ -n "$LOG_THREAD" ] && [ "$CHAT_ID" != "$LOG_THREAD" ]; then
   SAVE_CHAT_ID="$CHAT_ID"
   CHAT_ID="$LOG_THREAD"
-  LOG_MSG="[cron → ${SAVE_CHAT_ID}] ${RESPONSE:0:1900}"
-  send_message "$LOG_MSG"
+  send_message "[cron → ${SAVE_CHAT_ID}] ${RESPONSE:0:1900}"
   CHAT_ID="$SAVE_CHAT_ID"
   rm -f "$CRON_MARKER"
 fi

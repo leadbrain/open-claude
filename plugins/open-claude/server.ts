@@ -42,37 +42,26 @@ import { join, sep } from 'path'
 
 // ── Configuration ──
 
-// Config: CLAUDE_PLUGIN_DATA (persistent per-plugin dir, survives updates).
-// Workspace: OPEN_CLAUDE_WORKSPACE env, or cwd fallback.
-const DATA_DIR = process.env.CLAUDE_PLUGIN_DATA ?? join(process.cwd(), '.claude', 'discord')
-const ENV_FILE = join(DATA_DIR, 'discord.env')
-const WORKSPACE = process.env.OPEN_CLAUDE_WORKSPACE ?? process.cwd()
-const ACCESS_FILE = join(DATA_DIR, 'access.json')
-const APPROVED_DIR = join(DATA_DIR, 'approved')
-
-// Load .claude/discord.env into process.env. Real env wins.
-try {
-  chmodSync(ENV_FILE, 0o600)
-  for (const line of readFileSync(ENV_FILE, 'utf8').split('\n')) {
-    const m = line.match(/^(\w+)=(.*)$/)
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2]
-  }
-} catch {}
-
+// All config comes from environment variables, set via .mcp.json env field.
+// /open-claude:setup writes these to the workspace .mcp.json.
 const TOKEN = process.env.DISCORD_BOT_TOKEN
+const WORKSPACE = process.env.OPEN_CLAUDE_WORKSPACE ?? process.cwd()
 const STATIC = process.env.DISCORD_ACCESS_MODE === 'static'
 const TMUX_SESSION = process.env.DISCORD_TMUX_SESSION ?? ''
+
+// State directory: workspace-local
+const STATE_DIR = join(WORKSPACE, '.claude', 'discord')
+const ACCESS_FILE = join(STATE_DIR, 'access.json')
+const APPROVED_DIR = join(STATE_DIR, 'approved')
+const INBOX_DIR = join(STATE_DIR, 'inbox')
 
 if (!TOKEN) {
   process.stderr.write(
     `open-claude: DISCORD_BOT_TOKEN required\n` +
-    `  Run /open-claude:setup to configure\n` +
-    `  Or create ${ENV_FILE} with DISCORD_BOT_TOKEN=MTIz...\n`,
+    `  Run /open-claude:setup to configure\n`,
   )
   process.exit(1)
 }
-
-const INBOX_DIR = join(DATA_DIR, 'inbox')
 
 // Safety net — keep serving tools on unhandled errors.
 process.on('unhandledRejection', err => {
