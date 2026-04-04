@@ -42,14 +42,13 @@ import { join, sep } from 'path'
 
 // ── Configuration ──
 
-// Project-local config: .claude/discord.env in the workspace.
-// OPEN_CLAUDE_WORKSPACE is set by .mcp.json (captures pwd before cd to plugin root).
+// Config: CLAUDE_PLUGIN_DATA (persistent per-plugin dir, survives updates).
+// Workspace: OPEN_CLAUDE_WORKSPACE env, or cwd fallback.
+const DATA_DIR = process.env.CLAUDE_PLUGIN_DATA ?? join(process.cwd(), '.claude', 'discord')
+const ENV_FILE = join(DATA_DIR, 'discord.env')
 const WORKSPACE = process.env.OPEN_CLAUDE_WORKSPACE ?? process.cwd()
-process.stderr.write(`open-claude: workspace=${WORKSPACE}\n`)
-const ENV_FILE = join(WORKSPACE, '.claude', 'discord.env')
-const STATE_DIR = join(WORKSPACE, '.claude', 'discord')
-const ACCESS_FILE = join(STATE_DIR, 'access.json')
-const APPROVED_DIR = join(STATE_DIR, 'approved')
+const ACCESS_FILE = join(DATA_DIR, 'access.json')
+const APPROVED_DIR = join(DATA_DIR, 'approved')
 
 // Load .claude/discord.env into process.env. Real env wins.
 try {
@@ -73,7 +72,7 @@ if (!TOKEN) {
   process.exit(1)
 }
 
-const INBOX_DIR = join(STATE_DIR, 'inbox')
+const INBOX_DIR = join(DATA_DIR, 'inbox')
 
 // Safety net — keep serving tools on unhandled errors.
 process.on('unhandledRejection', err => {
@@ -92,7 +91,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Channel],
+  partials: [Partials.Channel, Partials.Message],
 })
 
 // ── Access control types ──
@@ -135,7 +134,7 @@ function assertSendable(f: string): void {
   let real: string, stateReal: string
   try {
     real = realpathSync(f)
-    stateReal = realpathSync(STATE_DIR)
+    stateReal = realpathSync(DATA_DIR)
   } catch { return }
   const inbox = join(stateReal, 'inbox')
   if (real.startsWith(stateReal + sep) && !real.startsWith(inbox + sep)) {
@@ -184,7 +183,7 @@ function loadAccess(): Access {
 
 function saveAccess(a: Access): void {
   if (STATIC) return
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+  mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
   const tmp = ACCESS_FILE + '.tmp'
   writeFileSync(tmp, JSON.stringify(a, null, 2) + '\n', { mode: 0o600 })
   renameSync(tmp, ACCESS_FILE)
@@ -777,9 +776,20 @@ client.on('interactionCreate', async (interaction) => {
   }
 })
 
-// ── MCP transport + shutdown ──
+// ── MCP transport (must be first — Claude Code expects immediate handshake) ──
 
 await mcp.connect(new StdioServerTransport())
+
+// ── Event handlers + Discord login (same order as working discord-custom) ──
+
+client.on('error', err => {
+  process.stderr.write(`open-claude: client error: ${err}\n`)
+})
+
+client.on('messageCreate', msg => {
+  if (msg.author.bot) return
+  handleInbound(msg).catch(e => process.stderr.write(`open-claude: handleInbound failed: ${e}\n`))
+})
 
 let shuttingDown = false
 function shutdown(): void {
@@ -793,17 +803,6 @@ process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
-
-client.on('error', err => {
-  process.stderr.write(`open-claude: client error: ${err}\n`)
-})
-
-// ── Inbound message handler ──
-
-client.on('messageCreate', msg => {
-  if (msg.author.bot) return
-  handleInbound(msg).catch(e => process.stderr.write(`open-claude: handleInbound failed: ${e}\n`))
-})
 
 async function handleInbound(msg: Message): Promise<void> {
   // Permission verdict replies
@@ -843,7 +842,7 @@ async function handleInbound(msg: Message): Promise<void> {
   const chat_id = msg.channelId
 
   // Message dedup across MCP instances
-  const DEDUP_DIR = join(STATE_DIR, 'dedup')
+  const DEDUP_DIR = join(DATA_DIR, 'dedup')
   mkdirSync(DEDUP_DIR, { recursive: true })
   const dedupFile = join(DEDUP_DIR, `${msg.id}.lock`)
   try {

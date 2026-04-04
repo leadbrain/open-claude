@@ -5,19 +5,15 @@
 #   1. Reverse-lookup session_id in memory/threads/*.json
 #   2. Fallback to DISCORD_LOG_THREAD (for cron jobs)
 #
-# Optional: event logging (set DISCORD_EVENT_LOG=true in .env)
-#   Records haiku summaries to memory/events/YYYY-MM-DD.md
-#   Enables cross-session context sharing
+# Optional: event logging (set DISCORD_EVENT_LOG=true in discord.env)
 
 INPUT=$(cat)
 LOG="/tmp/open-claude-debug.log"
 
-# Re-entry guard: if this hook fires from the event recorder's claude -p, exit
+# Re-entry guard
 if [ "$CLAUDE_HOOK_NOREENTRY" = "1" ]; then
   exit 0
 fi
-
-echo "[$(date)] Stop hook fired" >> "$LOG"
 
 # Kill typing loop
 TYPING_PID_FILE="/tmp/open-claude-typing.pid"
@@ -32,15 +28,16 @@ fi
 # Extract basic info
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
-echo "[$(date)] session_id=$SESSION_ID" >> "$LOG"
 
-# Load .env — project-local: .claude/discord.env in workspace
+# Load config from CLAUDE_PLUGIN_DATA
+DATA_DIR="${CLAUDE_PLUGIN_DATA:-$(pwd)/.claude/discord}"
+ENV_FILE="$DATA_DIR/discord.env"
 WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
-ENV_FILE="$WORKSPACE/.claude/discord.env"
 MAIN_CHANNEL=""
 LOG_THREAD=""
 BOT_TOKEN=""
 EVENT_LOG=""
+
 if [ -f "$ENV_FILE" ]; then
   MAIN_CHANNEL=$(grep DISCORD_MAIN_CHANNEL "$ENV_FILE" | cut -d= -f2)
   LOG_THREAD=$(grep DISCORD_LOG_THREAD "$ENV_FILE" | cut -d= -f2)
@@ -48,7 +45,6 @@ if [ -f "$ENV_FILE" ]; then
   EVENT_LOG=$(grep DISCORD_EVENT_LOG "$ENV_FILE" | cut -d= -f2)
 fi
 if [ -z "$BOT_TOKEN" ]; then
-  echo "[$(date)] No BOT_TOKEN, exiting" >> "$LOG"
   exit 0
 fi
 
@@ -57,7 +53,7 @@ fi
 CHAT_ID=""
 ROUTE_SOURCE=""
 
-# 1. Reverse-lookup session_id in memory/threads/*.json
+# Reverse-lookup session_id in memory/threads/*.json
 if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
   THREADS_DIR="$WORKSPACE/memory/threads"
   if [ -d "$THREADS_DIR" ]; then
@@ -77,18 +73,15 @@ if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
   fi
 fi
 
-# 2. Fallback: log thread (cron jobs)
+# Fallback: log thread (cron jobs)
 if [ -z "$CHAT_ID" ]; then
   if [ -n "$LOG_THREAD" ]; then
     CHAT_ID="$LOG_THREAD"
     ROUTE_SOURCE="log"
   else
-    echo "[$(date)] No route found, skipping" >> "$LOG"
     exit 0
   fi
 fi
-
-echo "[$(date)] Route: $ROUTE_SOURCE → $CHAT_ID" >> "$LOG"
 
 # ── Extract response ──
 
@@ -104,7 +97,6 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
 
   if [ -n "$LAST_USER_LINE" ]; then
     TRANSCRIPT_TEXT=$(tail -n +"$LAST_USER_LINE" "$TRANSCRIPT" | jq -s '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | join("\n\n")' -r 2>/dev/null)
-    echo "[$(date)] Transcript text len: ${#TRANSCRIPT_TEXT}" >> "$LOG"
   fi
 fi
 
@@ -126,11 +118,8 @@ else
 fi
 
 if [ -z "$RESPONSE" ]; then
-  echo "[$(date)] No response, exiting" >> "$LOG"
   exit 0
 fi
-
-echo "[$(date)] Sending (len=${#RESPONSE}) to $CHAT_ID" >> "$LOG"
 
 # ── Event logging (optional) ──
 
@@ -143,8 +132,6 @@ if [ "$EVENT_LOG" = "true" ]; then
     EVENTS_FILE="$EVENTS_DIR/${TODAY}.md"
     NOW=$(date +%H:%M)
 
-    SOURCE_LABEL="$CHAT_ID"
-
     SUMMARY_TMP=$(mktemp)
     echo "${RESPONSE:0:500}" > "$SUMMARY_TMP"
     SUMMARY=$(CLAUDE_HOOK_NOREENTRY=1 claude -p --model haiku \
@@ -154,8 +141,7 @@ if [ "$EVENT_LOG" = "true" ]; then
     rm -f "$SUMMARY_TMP"
 
     if [ -n "$SUMMARY" ]; then
-      echo "${NOW} [${SOURCE_LABEL}] ${SUMMARY}" >> "$EVENTS_FILE"
-      echo "[$(date)] Event recorded: $SUMMARY" >> "$LOG"
+      echo "${NOW} [${CHAT_ID}] ${SUMMARY}" >> "$EVENTS_FILE"
     fi
   }
   record_event &
@@ -165,12 +151,11 @@ fi
 
 send_message() {
   local text="$1"
-  CURL_RESULT=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X POST \
+  curl -s -w "\nHTTP_CODE:%{http_code}" -X POST \
     "https://discord.com/api/v10/channels/${CHAT_ID}/messages" \
     -H "Authorization: Bot ${BOT_TOKEN}" \
     -H "Content-Type: application/json" \
-    --data-raw "$(jq -n --arg content "$text" '{content: $content}')" 2>&1)
-  echo "[$(date)] curl: $CURL_RESULT" >> "$LOG"
+    --data-raw "$(jq -n --arg content "$text" '{content: $content}')" > /dev/null 2>&1
 }
 
 MSG_LEN=${#RESPONSE}
@@ -186,10 +171,9 @@ else
   done
 fi
 
-# ── Cron job: copy to log thread ──
+# Cron job: copy to log thread
 CRON_MARKER="/tmp/cron-marker-${SESSION_ID}"
 if [ -f "$CRON_MARKER" ] && [ -n "$LOG_THREAD" ] && [ "$CHAT_ID" != "$LOG_THREAD" ]; then
-  echo "[$(date)] Cron detected, copying to log thread $LOG_THREAD" >> "$LOG"
   SAVE_CHAT_ID="$CHAT_ID"
   CHAT_ID="$LOG_THREAD"
   LOG_MSG="[cron → ${SAVE_CHAT_ID}] ${RESPONSE:0:1900}"

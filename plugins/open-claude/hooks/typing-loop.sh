@@ -6,14 +6,14 @@
 
 CHANNEL_ID="$1"
 PID_FILE="/tmp/open-claude-typing.pid"
-WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
-TOKEN_FILE="$WORKSPACE/.claude/discord.env"
 
 if [ -z "$CHANNEL_ID" ]; then
   exit 1
 fi
 
-# Load bot token
+# Load bot token from CLAUDE_PLUGIN_DATA
+DATA_DIR="${CLAUDE_PLUGIN_DATA:-$(pwd)/.claude/discord}"
+TOKEN_FILE="$DATA_DIR/discord.env"
 if [ ! -f "$TOKEN_FILE" ]; then
   exit 0
 fi

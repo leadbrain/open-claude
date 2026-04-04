@@ -6,41 +6,27 @@
 # 3. Starts typing indicator loop
 
 INPUT=$(cat)
-LOG="/tmp/open-claude-track.log"
 
-echo "[$(date)] track-channel.sh fired" >> "$LOG"
-echo "[$(date)] RAW INPUT (first 500):" >> "$LOG"
-echo "${INPUT:0:500}" >> "$LOG"
-echo "[$(date)] --- END RAW ---" >> "$LOG"
-
-# Load config — project-local: .claude/discord.env in workspace
+# Load config from CLAUDE_PLUGIN_DATA (set by plugin system)
+# Fallback: .claude/discord.env in workspace
+DATA_DIR="${CLAUDE_PLUGIN_DATA:-$(pwd)/.claude/discord}"
+ENV_FILE="$DATA_DIR/discord.env"
 WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
-ENV_FILE="$WORKSPACE/.claude/discord.env"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 EVENT_LOG="${DISCORD_EVENT_LOG:-}"
-
-echo "[$(date)] ENV_FILE=$ENV_FILE exists=$([ -f "$ENV_FILE" ] && echo yes || echo no)" >> "$LOG"
 
 if [ -f "$ENV_FILE" ]; then
   [ -z "$MAIN_CHANNEL" ] && MAIN_CHANNEL=$(grep DISCORD_MAIN_CHANNEL "$ENV_FILE" | cut -d= -f2)
   [ -z "$EVENT_LOG" ] && EVENT_LOG=$(grep DISCORD_EVENT_LOG "$ENV_FILE" | cut -d= -f2)
 fi
 
-echo "[$(date)] WORKSPACE=$WORKSPACE MAIN_CHANNEL=$MAIN_CHANNEL" >> "$LOG"
-
 # Extract chat_id from prompt
 PROMPT_TEXT=$(echo "$INPUT" | jq -r '(.user_prompt // .prompt // "")' 2>/dev/null)
 CHAT_ID=$(echo "$PROMPT_TEXT" | sed -n 's/.*chat_id="\([^"]*\)".*/\1/p' | head -1)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 
-echo "[$(date)] CHAT_ID=$CHAT_ID SESSION_ID=$SESSION_ID" >> "$LOG"
-echo "[$(date)] PROMPT_TEXT (first 200): ${PROMPT_TEXT:0:200}" >> "$LOG"
-
 # Not a Discord message? Skip.
-if [ -z "$CHAT_ID" ]; then
-  echo "[$(date)] No chat_id found, exiting" >> "$LOG"
-  exit 0
-fi
+[ -z "$CHAT_ID" ] && exit 0
 
 # Record session_id → chat_id mapping
 if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
@@ -49,9 +35,6 @@ if [ -n "$SESSION_ID" ] && [ -n "$WORKSPACE" ]; then
   THREAD_FILE="$THREADS_DIR/${CHAT_ID}.json"
   jq -n --arg sid "$SESSION_ID" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)" \
     '{session_id: $sid, last_active: $ts}' > "$THREAD_FILE"
-  echo "[$(date)] Wrote $THREAD_FILE (sid=$SESSION_ID)" >> "$LOG"
-else
-  echo "[$(date)] SKIP write: SESSION_ID=$SESSION_ID WORKSPACE=$WORKSPACE" >> "$LOG"
 fi
 
 # ── Cross-session event injection (optional) ──
@@ -67,13 +50,11 @@ inject_events() {
   THREADS_DIR="$WORKSPACE/memory/threads"
   THREAD_FILE="$THREADS_DIR/${CHAT_ID}.json"
 
-  # Last event check time
   LAST_EVENT_TIME=""
   if [ -f "$THREAD_FILE" ]; then
     LAST_EVENT_TIME=$(jq -r '.last_event_time // empty' "$THREAD_FILE" 2>/dev/null)
   fi
 
-  # Get events since last check, excluding own session
   if [ -n "$LAST_EVENT_TIME" ]; then
     NEW_EVENTS=$(awk -v cutoff="$LAST_EVENT_TIME" '$1 > cutoff' "$EVENTS_FILE" | grep -v "\\[$CHAT_ID\\]" | tail -10)
   else
@@ -82,14 +63,12 @@ inject_events() {
 
   [ -z "$NEW_EVENTS" ] && return
 
-  # Update last_event_time
   LATEST_TIME=$(tail -1 "$EVENTS_FILE" | cut -d' ' -f1)
   if [ -n "$LATEST_TIME" ] && [ -f "$THREAD_FILE" ]; then
     jq --arg t "$LATEST_TIME" '.last_event_time = $t' "$THREAD_FILE" > "${THREAD_FILE}.tmp" && \
       mv "${THREAD_FILE}.tmp" "$THREAD_FILE"
   fi
 
-  # Output as additionalContext
   CONTEXT="Events from other sessions:\n${NEW_EVENTS}"
   jq -n --arg ctx "$CONTEXT" '{
     hookSpecificOutput: {

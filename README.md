@@ -61,23 +61,31 @@ Stop Hook (auto-reply.sh)
 ### 2. Install and configure
 
 ```bash
-# Install (project scope — tied to this workspace)
+# Install
 claude plugins marketplace add leadbrain/open-claude
 claude plugins install open-claude@open-claude --scope project
 
 # Restart Claude Code, then configure
 /open-claude:setup
+# Follow the interactive wizard — it saves config and copies start.sh
 ```
 
-After install, **restart Claude Code** (exit and reopen) to load the plugin.
+### 3. Start the Discord connection
 
-Alternative — load from local directory (for testing):
 ```bash
-git clone https://github.com/leadbrain/open-claude
-claude --plugin-dir ./open-claude/plugins/open-claude
+# Option A: use the start script (creates a tmux session)
+./start.sh
+
+# Option B: run directly
+claude --dangerously-load-development-channels plugin:open-claude@open-claude
+
+# Option C: add an alias
+alias open-claude='claude --dangerously-load-development-channels plugin:open-claude@open-claude'
 ```
 
-### 3. Pair your Discord account
+> **Why the flag?** The `claude/channel` capability (push notifications from Discord) requires `--dangerously-load-development-channels` for custom plugins. Official marketplace plugins don't need this.
+
+### 4. Pair your Discord account
 
 1. DM the bot on Discord — you'll get a pairing code
 2. In Claude Code: `/open-claude:access pair <code>`
@@ -85,13 +93,14 @@ claude --plugin-dir ./open-claude/plugins/open-claude
 
 ## Configuration
 
-Run `/open-claude:configure` in Claude Code, or edit `~/.claude/channels/discord/.env` directly:
+Run `/open-claude:configure` in Claude Code, or edit the config directly:
+
+Config file: `$CLAUDE_PLUGIN_DATA/discord.env` (created by `/open-claude:setup`)
 
 ```bash
 # Required
 DISCORD_BOT_TOKEN=MTIz...          # Bot token
 DISCORD_MAIN_CHANNEL=123456789     # Main channel ID
-DISCORD_WORKSPACE=/path/to/workspace
 
 # Optional
 DISCORD_TMUX_SESSION=claude        # tmux session for /clear, /restart, etc.

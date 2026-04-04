@@ -92,20 +92,22 @@ When the user provides a token:
    > To get a channel ID: right-click the channel in Discord → **Copy Channel ID**
    > (Enable Developer Mode in Discord Settings → App Settings → Advanced if you don't see this option)
 
-2. Once both are provided, create the config in the **workspace** (project-local):
+2. Once both are provided, save the config to **CLAUDE_PLUGIN_DATA** (persistent plugin directory):
 
 ```bash
-mkdir -p .claude/discord
+# CLAUDE_PLUGIN_DATA is set by the plugin system. Check it:
+echo $CLAUDE_PLUGIN_DATA
+# If empty, use fallback: .claude/discord/
 ```
 
-Write `.claude/discord.env`:
+Write `$CLAUDE_PLUGIN_DATA/discord.env` (or `.claude/discord/discord.env` if CLAUDE_PLUGIN_DATA is not set):
 ```
 DISCORD_BOT_TOKEN=<token>
 DISCORD_MAIN_CHANNEL=<channel_id>
 ```
 
 ```bash
-chmod 600 .claude/discord.env
+chmod 600 $CLAUDE_PLUGIN_DATA/discord.env
 ```
 
 Also create runtime directories:
@@ -113,53 +115,58 @@ Also create runtime directories:
 mkdir -p memory/threads memory/events
 ```
 
-Note: No `DISCORD_WORKSPACE` needed — the plugin uses `pwd` (current working directory) automatically.
+3. Copy `start.sh` to the workspace for convenience:
+```bash
+cp ${CLAUDE_PLUGIN_ROOT}/scripts/start.sh ./start.sh
+chmod +x ./start.sh
+```
 
-3. Confirm:
-   > Configuration saved. Hooks are auto-registered by the plugin system — no manual setup needed.
+4. Confirm:
+   > Configuration saved!
 
-## Step 5: Pairing guide
+## Step 5: Launch guide
 
 Tell the user:
 
-> **Pair your Discord account:**
+> **To start the Discord connection, exit Claude Code and run:**
+> ```
+> ./start.sh
+> ```
+> This creates a tmux session with the correct flags for Discord channel support.
 >
-> 1. Restart Claude Code (exit and reopen)
-> 2. Send a DM to your bot on Discord
-> 3. The bot will reply with a 6-character pairing code
-> 4. Run: `/open-claude:access pair <code>`
+> Alternatively, run directly:
+> ```
+> claude --dangerously-load-development-channels plugin:open-claude@open-claude
+> ```
+>
+> **Tip:** Add an alias to your shell profile:
+> ```
+> alias open-claude='claude --dangerously-load-development-channels plugin:open-claude@open-claude'
+> ```
+
+## Step 6: Pairing guide
+
+Tell the user:
+
+> **After starting, pair your Discord account:**
+>
+> 1. Send a DM to the bot on Discord → you'll get a pairing code
+> 2. Run `/open-claude:access pair <code>` in Claude Code
 >
 > Or add yourself directly: `/open-claude:access allow <your-discord-user-id>`
 >
 > To find your Discord user ID: enable Developer Mode → right-click your name → Copy User ID
 
-## Step 6: Optional settings
+## Step 7: Optional settings
 
 Ask if the user wants to configure any optional features:
 
-> **Optional features:**
-> - **tmux integration** — control Claude Code from Discord (`/clear`, `/restart`). Set `DISCORD_TMUX_SESSION=<session-name>` in .env
-> - **Event logging** — cross-session context sharing. Set `DISCORD_EVENT_LOG=true` in .env
-> - **Thread model** — change the model for thread sessions (default: sonnet). Set `DISCORD_THREAD_MODEL=<model>` in .env
+> **Optional features** (add to discord.env):
+> - `DISCORD_TMUX_SESSION=<name>` — control Claude from Discord (`/clear`, `/restart`)
+> - `DISCORD_EVENT_LOG=true` — cross-session context sharing
+> - `DISCORD_THREAD_MODEL=<model>` — model for thread sessions (default: sonnet)
 >
 > Want to set up any of these? Or you're all set!
-
-If the user wants any, update the `.env` file accordingly.
-
-## Step 7: Restart prompt
-
-After all configuration is done, give a clear final message:
-
-> **All set! Restart Claude Code to activate the Discord connection.**
->
-> Exit this session (`Ctrl+C` or type `exit`), then run `claude` again.
->
-> After restart:
-> 1. The bot will appear online in Discord
-> 2. DM the bot to get a pairing code
-> 3. Run `/open-claude:access pair <code>` to connect your account
-
-This is the LAST step. Do not continue the conversation after this — the user needs to restart for the plugin to load the MCP server and hooks.
 
 ## Important
 
