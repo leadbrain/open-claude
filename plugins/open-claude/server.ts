@@ -794,6 +794,10 @@ process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 
 async function handleInbound(msg: Message): Promise<void> {
+  // Thread-scoped MCP: only handle messages for our assigned thread
+  const THREAD_CHANNEL = process.env.DISCORD_THREAD_CHANNEL
+  if (THREAD_CHANNEL && msg.channelId !== THREAD_CHANNEL) return
+
   // Permission verdict replies
   const verdictMatch = PERMISSION_REPLY_RE.exec(msg.content)
   if (verdictMatch) {
@@ -829,8 +833,68 @@ async function handleInbound(msg: Message): Promise<void> {
   }
 
   const chat_id = msg.channelId
+  const MAIN_CHANNEL = process.env.DISCORD_MAIN_CHANNEL ?? ''
 
-  // Message dedup across MCP instances
+  // Thread routing: check BEFORE dedup so the thread's own MCP can handle it.
+  // If tmux window already exists for this thread, skip — that window's MCP will process it.
+  if (MAIN_CHANNEL && WORKSPACE && !process.env.DISCORD_THREAD_CHANNEL && msg.channel.isThread() && chat_id !== MAIN_CHANNEL) {
+    // Thread routing: each thread gets a persistent tmux window with its own Claude session.
+    // First message creates the window; subsequent messages are handled by that window's MCP.
+    const { execSync } = require('child_process') as typeof import('child_process')
+    const tmuxSession = process.env.DISCORD_TMUX_SESSION ?? 'open-claude'
+    const windowName = `thread-${chat_id}`
+
+    // Check if tmux window already exists
+    let windowExists = false
+    try {
+      execSync(`tmux has-session -t ${tmuxSession} 2>/dev/null && tmux list-windows -t ${tmuxSession} -F "#{window_name}" | grep -q "^${windowName}$"`, { timeout: 3000 })
+      windowExists = true
+    } catch {}
+
+    if (!windowExists) {
+      process.stderr.write(`open-claude: thread ${chat_id} — creating tmux window\n`)
+
+      if ('sendTyping' in msg.channel) {
+        void msg.channel.sendTyping().catch(() => {})
+      }
+
+      // Look up existing session for --resume
+      const threadsDir = join(WORKSPACE, 'memory', 'threads')
+      mkdirSync(threadsDir, { recursive: true })
+      const stateFile = join(threadsDir, `${chat_id}.json`)
+      let resumeArg = ''
+      try {
+        const state = JSON.parse(readFileSync(stateFile, 'utf8'))
+        if (state.session_id) resumeArg = `--resume ${state.session_id}`
+      } catch {}
+
+      const threadModel = process.env.DISCORD_THREAD_MODEL ?? 'sonnet'
+
+      try {
+        // Create tmux window with Claude session — set DISCORD_THREAD_CHANNEL so it only handles this thread
+        const cmd = `cd '${WORKSPACE}' && export DISCORD_THREAD_CHANNEL=${chat_id} && claude --dangerously-load-development-channels server:open-claude --model ${threadModel} ${resumeArg}`
+        execSync(`tmux new-window -t ${tmuxSession} -n ${windowName} '${cmd.replace(/'/g, "'\\''")}'`, { timeout: 5000 })
+        // Auto-approve the development channels prompt
+        setTimeout(() => {
+          try { execSync(`tmux send-keys -t ${tmuxSession}:${windowName} Enter`, { timeout: 3000 }) } catch {}
+        }, 3000)
+        process.stderr.write(`open-claude: thread ${chat_id} — tmux window created\n`)
+      } catch (err) {
+        process.stderr.write(`open-claude: thread tmux error: ${err}\n`)
+        if ('send' in msg.channel) {
+          void (msg.channel as any).send(`\u26A0\uFE0F Failed to create thread session: ${(err as Error).message?.slice(0, 200)}`).catch(() => {})
+        }
+      }
+    } else {
+      process.stderr.write(`open-claude: thread ${chat_id} — window exists, MCP will handle\n`)
+    }
+
+    // Don't forward to main session — the thread's own MCP will receive the message
+    // (or already received it via dedup race)
+    return
+  }
+
+  // Message dedup (after thread routing, before main channel handling)
   const DEDUP_DIR = join(STATE_DIR, 'dedup')
   mkdirSync(DEDUP_DIR, { recursive: true })
   const dedupFile = join(DEDUP_DIR, `${msg.id}.lock`)
@@ -848,69 +912,6 @@ async function handleInbound(msg: Message): Promise<void> {
       if (now - statSync(fp).mtimeMs > 300_000) unlinkSync(fp)
     }
   } catch {}
-
-  // Thread routing: independent claude -p sessions per thread
-  const MAIN_CHANNEL = process.env.DISCORD_MAIN_CHANNEL ?? ''
-
-  if (MAIN_CHANNEL && WORKSPACE && msg.channel.isThread() && chat_id !== MAIN_CHANNEL) {
-    process.stderr.write(`open-claude: thread ${chat_id} — routing to claude -p\n`)
-
-    if ('sendTyping' in msg.channel) {
-      void msg.channel.sendTyping().catch(() => {})
-    }
-
-    const threadsDir = join(WORKSPACE, 'memory', 'threads')
-    mkdirSync(threadsDir, { recursive: true })
-    const stateFile = join(threadsDir, `${chat_id}.json`)
-
-    let sessionId = ''
-    try {
-      const state = JSON.parse(readFileSync(stateFile, 'utf8'))
-      sessionId = state.session_id ?? ''
-    } catch {}
-
-    const userMsg = msg.content || '(empty)'
-    const userName = msg.author.username
-    const userId = msg.author.id
-    const ts = msg.createdAt.toISOString()
-    const prompt = `<channel source="discord" chat_id="${chat_id}" message_id="${msg.id}" user="${userName}" user_id="${userId}" ts="${ts}">\n${userMsg}\n</channel>`
-
-    const threadModel = process.env.DISCORD_THREAD_MODEL ?? 'sonnet'
-    const args = ['-p', prompt, '--model', threadModel, '--output-format', 'json', '--dangerously-skip-permissions']
-    if (sessionId) args.push('--resume', sessionId)
-
-    execFile('claude', args, { cwd: WORKSPACE, timeout: 180000 }, (err, stdout, stderr) => {
-      if (err) {
-        const isTimeout = err.killed || (err as any).code === 'ETIMEDOUT'
-        const errDetail = isTimeout ? 'timeout (180s)' : err.message
-        process.stderr.write(`open-claude: thread claude -p error: ${errDetail}\n`)
-        if (stderr) process.stderr.write(`open-claude: thread stderr: ${stderr.slice(0, 500)}\n`)
-
-        const errorMsg = isTimeout
-          ? '\u26A0\uFE0F Response timed out (180s). Try again.'
-          : `\u26A0\uFE0F Response failed: ${errDetail.slice(0, 200)}`
-        if ('send' in msg.channel) {
-          void (msg.channel as any).send(errorMsg).catch(() => {})
-        }
-        return
-      }
-
-      let newSessionId = ''
-      try {
-        const result = JSON.parse(stdout)
-        newSessionId = result.session_id ?? ''
-      } catch {}
-
-      if (newSessionId) {
-        const now = new Date().toISOString()
-        writeFileSync(stateFile, JSON.stringify({ session_id: newSessionId, last_active: now }) + '\n')
-      }
-
-      process.stderr.write(`open-claude: thread ${chat_id} done (session: ${newSessionId})\n`)
-    })
-
-    return
-  }
 
   // Main channel — deliver to MCP notification
   if ('sendTyping' in msg.channel) {
