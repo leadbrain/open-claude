@@ -174,6 +174,15 @@ export class DiscordAdapter implements PlatformAdapter {
     await msg.react(emoji)
   }
 
+  async removeReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    const ch = await this.fetchTextChannel(channelId)
+    const msg = await ch.messages.fetch(messageId)
+    const botId = this.client.user?.id
+    if (botId) {
+      await msg.reactions.cache.get(emoji)?.users.remove(botId)
+    }
+  }
+
   async sendTyping(channelId: string): Promise<void> {
     const ch = await this.fetchTextChannel(channelId)
     if ('sendTyping' in ch) await (ch as any).sendTyping()

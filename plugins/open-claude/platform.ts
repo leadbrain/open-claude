@@ -64,6 +64,7 @@ export interface PlatformAdapter {
   sendMessage(channelId: string, opts: SendOptions): Promise<string>
   editMessage(channelId: string, messageId: string, content: string): Promise<void>
   react(channelId: string, messageId: string, emoji: string): Promise<void>
+  removeReaction?(channelId: string, messageId: string, emoji: string): Promise<void>
   sendTyping(channelId: string): Promise<void>
   fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]>
   downloadAttachment(att: PlatformAttachment): Promise<{ data: Buffer; name: string }>

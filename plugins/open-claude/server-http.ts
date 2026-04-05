@@ -63,6 +63,9 @@ interface Session {
 const sessions = new Map<string, Session>()
 const chatToSession = new Map<string, string>()
 
+// Track ack'd messages so we can remove the reaction on reply
+const ackedMessages = new Map<string, { chatId: string; emoji: string }>()  // messageId → { chatId, emoji }
+
 function getSessionByChatId(chatId: string): Session | undefined {
   const sid = chatToSession.get(chatId)
   return sid ? sessions.get(sid) : undefined
@@ -257,9 +260,25 @@ async function handleToolCall(tool: string, args: Record<string, unknown>): Prom
 
 adapter.onMessage(async (msg: PlatformMessage) => {
   process.stderr.write(`open-claude: onMessage from=${msg.authorName} ch=${msg.channelId} isBot=${msg.isBot} isDM=${msg.isDM}\n`)
-  // Bot filter — allow own [scheduled] messages only
+  // Bot filter
   if (msg.isBot) {
-    if (msg.authorId !== adapter.getBotId() || !msg.content.startsWith('[scheduled]')) return
+    // Own message (response sent by Stop hook) — remove ack reactions
+    if (msg.authorId === adapter.getBotId()) {
+      if (msg.content.startsWith('[scheduled]')) {
+        // Scheduled trigger — process as inbound
+      } else {
+        // Response sent — remove ack emoji from messages in this channel
+        for (const [msgId, ack] of ackedMessages) {
+          if (ack.chatId === msg.channelId) {
+            adapter.removeReaction(msg.channelId, msgId, ack.emoji).catch(() => {})
+            ackedMessages.delete(msgId)
+          }
+        }
+        return
+      }
+    } else {
+      return
+    }
   }
 
   // Gate check
@@ -323,6 +342,7 @@ adapter.onMessage(async (msg: PlatformMessage) => {
   // Ack reaction
   if (access.ackReaction) {
     adapter.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
+    ackedMessages.set(msg.id, { chatId: msg.channelId, emoji: access.ackReaction })
   }
 
   // Route to session — enqueue for polling
