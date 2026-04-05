@@ -1,46 +1,46 @@
 # open-claude
 
-Discord channel plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Talk to Claude from Discord — messages, threads, file attachments, and cron jobs.
+Discord channel plugin for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Talk to Claude from Discord — messages, threads, file attachments, and scheduled tasks.
 
 ## What it does
 
-- **Main channel**: Messages forwarded to your running Claude Code session via MCP
-- **Threads**: Each thread gets an independent `claude -p` session (auto-resumed)
+- **Main channel**: Messages forwarded to your running Claude Code session
+- **Threads**: Each thread gets an independent Claude session (auto-spawned)
 - **Typing indicator**: Shows "typing..." while Claude processes
 - **Access control**: Pairing codes for DMs, per-channel allowlists for servers
-- **Slash commands**: `/clear`, `/compact`, `/restart`, `/enter`, `/esc` (requires tmux)
-- **Skills**: `/open-claude:configure` and `/open-claude:access` for setup and access management
-- **Cron jobs**: Run skills on a schedule, results sent to Discord threads
+- **Slash commands**: `/clear`, `/compact`, `/restart`, `/enter`, `/esc`
+- **Scheduled tasks**: Built-in cron scheduler for conversation analysis, indexing, etc.
+- **CLAUDE.md template**: Persistent user context with auto-updating sections
 
 ## Architecture
 
 ```
-Discord Message
+Discord
   │
   ▼
-server.ts (MCP Server)
-  ├─ Main channel → MCP notification → Claude Code session
-  ├─ Thread → spawn claude -p (sonnet) → Stop hook sends response
-  └─ Access gate (pairing / allowlist / mention check)
+server-http.ts (persistent HTTP server)
+  ├─ Single Discord gateway connection
+  ├─ Access control (gate)
+  ├─ Built-in scheduler (features.json)
+  ├─ Thread spawning (tmux)
+  └─ Message queue per session
        │
-       ▼
-UserPromptSubmit Hook (track-channel.sh)
-  ├─ Records session_id → chat_id mapping
-  ├─ Starts typing loop
-  └─ Injects cross-session events (optional)
+       ▼ (HTTP polling)
+proxy.ts (stdio, per session)
+  ├─ Registers with server, polls /api/messages
+  ├─ Delivers messages as claude/channel notifications
+  └─ Proxies tool calls to server
        │
-       ▼
-Stop Hook (auto-reply.sh)
-  ├─ Kills typing loop
-  ├─ Routes response via session_id lookup
-  ├─ Splits messages >2000 chars
-  └─ Records event summary (optional)
+       ▼ (stdio)
+Claude Code session
+  ├─ Processes messages
+  └─ Stop hook (auto-reply.sh) sends response to Discord
 ```
 
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (CLI)
-- [Bun](https://bun.sh) (runtime for the MCP server)
+- [Bun](https://bun.sh) (runtime)
 - [jq](https://jqlang.github.io/jq/) (JSON processing in hooks)
 - A Discord bot token
 
@@ -50,70 +50,67 @@ Stop Hook (auto-reply.sh)
 
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
 2. New Application → Bot → Reset Token → copy it
-3. Enable these **Privileged Gateway Intents**:
-   - Message Content Intent
-   - Server Members Intent (optional, for mentions)
-4. Invite the bot to your server with these permissions:
-   - Send Messages, Read Message History, Add Reactions, Manage Messages, Use Slash Commands
-
-   OAuth2 URL scope: `bot` + `applications.commands`
+3. Enable **Privileged Gateway Intents**:
+   - Message Content Intent (required)
+   - Server Members Intent (optional)
+4. Invite the bot: OAuth2 → URL Generator → scopes: `bot` + `applications.commands` → permissions: Send Messages, Read Message History, Add Reactions, Manage Messages, Use Slash Commands
 
 ### 2. Install and configure
 
 ```bash
-# Install
+# Install plugin
 claude plugins marketplace add leadbrain/open-claude
 claude plugins install open-claude@open-claude --scope project
 
-# Restart Claude Code, then configure
+# Run setup wizard
 /open-claude:setup
-# Follow the interactive wizard — it saves config and copies start.sh
 ```
 
-### 3. Start the Discord connection
+The setup wizard creates:
+- `.mcp.json` — proxy configuration
+- `.claude/discord.env` — bot token and settings
+- `.claude/discord/access.json` — access control with main channel
+- `start-http.sh` — launch script
+
+### 3. Start
 
 ```bash
-# Option A: use the start script (creates a tmux session)
-./start.sh
-
-# Option B: run directly
-claude --dangerously-load-development-channels plugin:open-claude@open-claude
-
-# Option C: add an alias
-alias open-claude='claude --dangerously-load-development-channels plugin:open-claude@open-claude'
+./start-http.sh
 ```
 
-> **Why the flag?** The `claude/channel` capability (push notifications from Discord) requires `--dangerously-load-development-channels` for custom plugins. Official marketplace plugins don't need this.
+This creates a tmux session with:
+- **server** window: HTTP server + Discord connection
+- **main** window: Claude Code session (auto-connects via proxy)
 
 ### 4. Pair your Discord account
 
-1. DM the bot on Discord — you'll get a pairing code
+1. DM the bot on Discord → get a pairing code
 2. In Claude Code: `/open-claude:access pair <code>`
-3. Done! Send messages in your main channel or threads
+
+Or add directly: `/open-claude:access allow <your-discord-user-id>`
 
 ## Configuration
 
-Run `/open-claude:configure` in Claude Code, or edit the config directly:
-
-Config file: `$CLAUDE_PLUGIN_DATA/discord.env` (created by `/open-claude:setup`)
+Bot token and channel settings are in `.claude/discord.env`:
 
 ```bash
-# Required
 DISCORD_BOT_TOKEN=MTIz...          # Bot token
 DISCORD_MAIN_CHANNEL=123456789     # Main channel ID
-
-# Optional
-DISCORD_TMUX_SESSION=claude        # tmux session for /clear, /restart, etc.
-DISCORD_LOG_THREAD=123456789       # Thread for cron job log copies
-DISCORD_THREAD_MODEL=sonnet        # Model for thread sessions (default: sonnet)
-DISCORD_EVENT_LOG=true             # Enable cross-session event logging
-DISCORD_PERMISSION_CHANNEL=123     # Channel for permission notifications
-DISCORD_ACCESS_MODE=static         # Lock access config at boot
+OPEN_CLAUDE_WORKSPACE=/path/to/ws  # Workspace path
 ```
 
-## Access control
+Optional settings (add to `.claude/discord.env`):
+```bash
+DISCORD_TMUX_SESSION=open-claude   # tmux session name (default: open-claude)
+DISCORD_THREAD_MODEL=sonnet        # Model for thread sessions (default: sonnet)
+DISCORD_EVENT_LOG=true             # Cross-session event logging (default: true)
+DISCORD_LOG_THREAD=123456789       # Thread for cron job log copies
+OPEN_CLAUDE_PORT=3100              # HTTP server port (default: 3100)
+```
 
-Run `/open-claude:access` for interactive management, or see [ACCESS.md](ACCESS.md) for details.
+Manage settings: `/open-claude:configure`
+
+## Access control
 
 Quick reference:
 - **Pair a user**: `/open-claude:access pair <code>`
@@ -121,63 +118,102 @@ Quick reference:
 - **Add a channel**: `/open-claude:access group add <channel-id>`
 - **Check status**: `/open-claude:access status`
 
-## Cron jobs
+See [ACCESS.md](plugins/open-claude/ACCESS.md) for details.
 
-Run skills on a schedule and send results to a Discord thread:
+## Optional features
+
+Features are managed via `memory/features.json` and the built-in scheduler:
 
 ```bash
-.claude/plugins/open-claude/scripts/cron-runner.sh <skill> <thread-id> [model] [timeout]
+/open-claude:configure features list                                          # Show status
+/open-claude:configure features enable conversation-analysis --channel <id>   # Enable daily analysis
+/open-claude:configure features disable conversation-analysis                 # Disable
 ```
 
-Example crontab:
+Available features:
+
+| Feature | Description | Schedule |
+|---------|-------------|----------|
+| `conversation-analysis` | Daily conversation summary, updates user context | `30 21 * * *` |
+| `qmd` | Transcript indexing + semantic search | on-demand |
+
+The scheduler checks `memory/features.json` every 60 seconds and sends `[scheduled] /<name>` to the target channel when the cron expression matches.
+
+## CLAUDE.md template
+
+Setup generates a `CLAUDE.md` with persistent user context:
+
+```bash
+# Generated during /open-claude:setup
 ```
-30 7 * * * /path/to/workspace/.claude/plugins/open-claude/scripts/cron-runner.sh weather-briefing 1485223225737613362 haiku 120
-```
+
+The `<!-- AUTO:recent-context -->` section is auto-updated by the conversation-analysis feature.
 
 ## Plugin structure
 
 ```
 open-claude/
-├── .claude-plugin/
-│   └── plugin.json         # Plugin metadata
-├── .mcp.json               # MCP server config (auto-loaded)
+├── proxy.ts               # Stdio MCP proxy (per session)
+├── server-http.ts         # Persistent HTTP server
+├── server.ts              # Legacy stdio server (fallback)
+├── core.ts                # Shared logic (tools, gate, dedup)
+├── lib.ts                 # Pure functions (chunk, gate, cron)
+├── platform.ts            # Platform adapter interface
+├── adapters/
+│   ├── discord.ts         # Discord adapter
+│   └── lark.ts            # Lark adapter (experimental)
 ├── hooks/
-│   ├── hooks.json          # Hook registrations (auto-loaded)
-│   ├── auto-reply.sh       # Stop hook — send response to Discord
-│   ├── track-channel.sh    # Submit hook — session tracking + typing
-│   └── typing-loop.sh      # Background typing indicator
-├── skills/
-│   ├── configure/SKILL.md  # /open-claude:configure
-│   └── access/SKILL.md     # /open-claude:access
+│   ├── hooks.json         # Hook registrations
+│   ├── auto-reply.sh      # Stop hook — send response to Discord
+│   ├── track-channel.sh   # Submit hook — session tracking + typing
+│   ├── typing-loop.sh     # Background typing indicator
+│   └── platform-send.sh   # Platform-aware send functions
 ├── scripts/
-│   └── cron-runner.sh      # Cron job executor
-├── server.ts               # MCP server
+│   ├── start-http.sh      # HTTP mode launcher
+│   ├── start.sh           # Legacy stdio launcher
+│   └── cron-runner.sh     # Legacy cron executor
+├── skills/
+│   ├── setup/SKILL.md
+│   ├── configure/SKILL.md
+│   ├── access/SKILL.md
+│   ├── conversation-analysis/SKILL.md
+│   └── qmd-index/SKILL.md
+├── templates/
+│   └── CLAUDE.md          # User context template
+├── __tests__/             # 93 tests (bun test)
 ├── package.json
-├── README.md
 ├── ACCESS.md
 └── LICENSE
 ```
 
 Runtime state (in your workspace):
 ```
+.claude/discord/
+├── access.json            # Access control
+├── discord.env            # Bot config
+└── dedup/                 # Message dedup locks
 memory/
-├── threads/{chat_id}.json  # Session ↔ channel mapping
-└── events/{date}.md        # Cross-session event log (optional)
+├── threads/{chat_id}.json # Session ↔ channel mapping
+├── events/{date}.md       # Cross-session event log
+├── features.json          # Scheduled feature config
+└── user-context.json      # User profile & preferences
 ```
 
 ## Troubleshooting
 
 | Issue | Check |
 |-------|-------|
-| No response in Discord | Plugin enabled? `claude plugins list` |
+| No response in Discord | `curl http://localhost:3100/health` — sessions > 0? |
+| Messages dropped | Check `access.json` — is the channel in `groups`? Is `requireMention` false? |
 | Typing never stops | `/tmp/open-claude-typing.pid` — PID still alive? |
-| Thread not responding | `DISCORD_WORKSPACE` correct in `.env`? |
-| Permission errors | `~/.claude/channels/discord/` mode 700? |
+| Thread not responding | Server log — `tmux capture-pane -t open-claude:server` |
+| Proxy not connecting | `/tmp/open-claude-proxy.log` |
 
 Debug logs:
+- Server: `tmux capture-pane -t open-claude:server`
+- Proxy: `/tmp/open-claude-proxy.log`
 - Stop hook: `/tmp/open-claude-debug.log`
-- Cron: `/tmp/open-claude-cron/<skill>-<timestamp>.log`
-- MCP: Claude Code's MCP stderr
+- Health: `curl http://localhost:3100/health`
 
 ## License
 
