@@ -1,0 +1,2 @@
+{"type":"user","message":{"content":[{"type":"text","text":"hello"}]},"permissionMode":"default"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Hi there! How can I help you?"}]}}

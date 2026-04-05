@@ -1,0 +1,14 @@
+#!/bin/bash
+# Mock curl — records calls to a log file for test verification
+LOG_FILE="${MOCK_CURL_LOG:-/tmp/mock-curl.log}"
+echo "CALL: $*" >> "$LOG_FILE"
+
+# Extract --data-raw content
+for i in "$@"; do
+  if [ "$prev" = "--data-raw" ]; then
+    echo "DATA: $i" >> "$LOG_FILE"
+  fi
+  prev="$i"
+done
+
+echo "---" >> "$LOG_FILE"

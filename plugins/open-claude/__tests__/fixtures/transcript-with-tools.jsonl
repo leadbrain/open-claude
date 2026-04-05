@@ -1,0 +1,4 @@
+{"type":"user","message":{"content":[{"type":"text","text":"list files and check server.ts"}]},"permissionMode":"default"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Let me check the files."},{"type":"tool_use","id":"tu_1","name":"Bash","input":{"command":"ls -la src/"}},{"type":"tool_use","id":"tu_2","name":"Read","input":{"file_path":"/home/user/project/server.ts"}},{"type":"tool_use","id":"tu_3","name":"Glob","input":{"pattern":"**/*.ts"}},{"type":"tool_use","id":"tu_4","name":"Grep","input":{"pattern":"TODO","path":"/home/user/project/src"}},{"type":"text","text":"Found 3 TypeScript files."}]}}
+{"type":"user","toolUseResult":{"tool_use_id":"tu_1","content":"file1.ts\nfile2.ts"}}
+{"type":"user","toolUseResult":{"tool_use_id":"tu_2","content":"const x = 1"}}

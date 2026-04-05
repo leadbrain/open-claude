@@ -11,7 +11,7 @@ INPUT=$(cat)
 # Hooks run in workspace cwd, so pwd = workspace
 WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
-EVENT_LOG="${DISCORD_EVENT_LOG:-}"
+EVENT_LOG="${DISCORD_EVENT_LOG:-true}"
 
 # Extract chat_id from prompt
 PROMPT_TEXT=$(echo "$INPUT" | jq -r '(.user_prompt // .prompt // "")' 2>/dev/null)

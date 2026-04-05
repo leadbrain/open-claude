@@ -39,6 +39,13 @@ import {
 import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { join, sep } from 'path'
+import {
+  type Access, type GateResult,
+  defaultAccess as _defaultAccess,
+  pruneExpired as _pruneExpired,
+  chunk as _chunk,
+  MAX_CHUNK_LIMIT as _MAX_CHUNK_LIMIT,
+} from './lib.ts'
 
 // ── Configuration ──
 
@@ -47,7 +54,7 @@ import { join, sep } from 'path'
 const TOKEN = process.env.DISCORD_BOT_TOKEN
 const WORKSPACE = process.env.OPEN_CLAUDE_WORKSPACE ?? process.cwd()
 const STATIC = process.env.DISCORD_ACCESS_MODE === 'static'
-const TMUX_SESSION = process.env.DISCORD_TMUX_SESSION ?? ''
+const TMUX_SESSION = process.env.DISCORD_TMUX_SESSION ?? 'open-claude'
 
 // State directory: workspace-local
 const STATE_DIR = join(WORKSPACE, '.claude', 'discord')
@@ -83,38 +90,12 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message],
 })
 
-// ── Access control types ──
+// ── Access control (types from lib.ts) ──
 
-type PendingEntry = {
-  senderId: string
-  chatId: string
-  createdAt: number
-  expiresAt: number
-  replies: number
-}
-
-type GroupPolicy = {
-  requireMention: boolean
-  allowFrom: string[]
-}
-
-type Access = {
-  dmPolicy: 'pairing' | 'allowlist' | 'disabled'
-  allowFrom: string[]
-  groups: Record<string, GroupPolicy>
-  pending: Record<string, PendingEntry>
-  mentionPatterns?: string[]
-  ackReaction?: string
-  replyToMode?: 'off' | 'first' | 'all'
-  textChunkLimit?: number
-  chunkMode?: 'length' | 'newline'
-}
-
-function defaultAccess(): Access {
-  return { dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {} }
-}
-
-const MAX_CHUNK_LIMIT = 2000
+const defaultAccess = _defaultAccess
+const pruneExpired = _pruneExpired
+const chunk = _chunk
+const MAX_CHUNK_LIMIT = _MAX_CHUNK_LIMIT
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
 // ── Access file management ──
@@ -141,10 +122,10 @@ function readAccessFile(): Access {
       groups: parsed.groups ?? {},
       pending: parsed.pending ?? {},
       mentionPatterns: parsed.mentionPatterns,
-      ackReaction: parsed.ackReaction,
+      ackReaction: parsed.ackReaction ?? '👀',
       replyToMode: parsed.replyToMode,
       textChunkLimit: parsed.textChunkLimit,
-      chunkMode: parsed.chunkMode,
+      chunkMode: parsed.chunkMode ?? 'newline',
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return defaultAccess()
@@ -176,15 +157,6 @@ function saveAccess(a: Access): void {
   const tmp = ACCESS_FILE + '.tmp'
   writeFileSync(tmp, JSON.stringify(a, null, 2) + '\n', { mode: 0o600 })
   renameSync(tmp, ACCESS_FILE)
-}
-
-function pruneExpired(a: Access): boolean {
-  const now = Date.now()
-  let changed = false
-  for (const [code, p] of Object.entries(a.pending)) {
-    if (p.expiresAt < now) { delete a.pending[code]; changed = true }
-  }
-  return changed
 }
 
 // ── Inbound gate ──
@@ -301,27 +273,6 @@ function checkApprovals(): void {
 }
 
 if (!STATIC) setInterval(checkApprovals, 5000).unref()
-
-// ── Message splitting ──
-
-function chunk(text: string, limit: number, mode: 'length' | 'newline'): string[] {
-  if (text.length <= limit) return [text]
-  const out: string[] = []
-  let rest = text
-  while (rest.length > limit) {
-    let cut = limit
-    if (mode === 'newline') {
-      const para = rest.lastIndexOf('\n\n', limit)
-      const line = rest.lastIndexOf('\n', limit)
-      const space = rest.lastIndexOf(' ', limit)
-      cut = para > limit / 2 ? para : line > limit / 2 ? line : space > 0 ? space : limit
-    }
-    out.push(rest.slice(0, cut))
-    rest = rest.slice(cut).replace(/^\n+/, '')
-  }
-  if (rest) out.push(rest)
-  return out
-}
 
 // ── Channel helpers ──
 

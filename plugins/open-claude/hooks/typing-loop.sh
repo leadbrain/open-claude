@@ -1,8 +1,9 @@
 #!/bin/bash
-# typing-loop.sh — Send Discord typing indicator every 8 seconds
+# typing-loop.sh — Send typing indicator every 8 seconds
 #
 # Started by: track-channel.sh (UserPromptSubmit)
 # Killed by:  auto-reply.sh (Stop hook)
+# Supports: Discord (typing API), Lark (no-op)
 
 CHANNEL_ID="$1"
 PID_FILE="/tmp/open-claude-typing.pid"
@@ -12,10 +13,14 @@ if [ -z "$CHANNEL_ID" ]; then
 fi
 
 # Token from environment
-TOKEN="${DISCORD_BOT_TOKEN:-}"
-if [ -z "$TOKEN" ]; then
+BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"
+if [ -z "$BOT_TOKEN" ] && [ "${OPEN_CLAUDE_PLATFORM:-discord}" = "discord" ]; then
   exit 0
 fi
+
+# Source platform-aware send functions
+PLUGIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$PLUGIN_DIR/hooks/platform-send.sh"
 
 # Kill existing loop
 if [ -f "$PID_FILE" ]; then
@@ -28,8 +33,6 @@ fi
 echo $$ > "$PID_FILE"
 
 while true; do
-  curl -s -X POST "https://discord.com/api/v10/channels/$CHANNEL_ID/typing" \
-    -H "Authorization: Bot $TOKEN" \
-    > /dev/null 2>&1
+  send_typing "$CHANNEL_ID"
   sleep 8
 done

@@ -30,7 +30,7 @@ WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 LOG_THREAD="${DISCORD_LOG_THREAD:-}"
 BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"
-EVENT_LOG="${DISCORD_EVENT_LOG:-}"
+EVENT_LOG="${DISCORD_EVENT_LOG:-true}"
 
 if [ -z "$BOT_TOKEN" ]; then
   exit 0
@@ -77,32 +77,47 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
   if [ "$ROUTE_SOURCE" = "main" ]; then
     LAST_USER_LINE=$(grep -n '"origin":{"kind":"channel"' "$TRANSCRIPT" | tail -1 | cut -d: -f1)
   elif [ "$ROUTE_SOURCE" = "thread" ]; then
-    LAST_USER_LINE=$(grep -n '"type":"user"' "$TRANSCRIPT" | tail -1 | cut -d: -f1)
+    LAST_USER_LINE=$(grep -n '"type":"user"' "$TRANSCRIPT" | grep '"permissionMode"' | tail -1 | cut -d: -f1)
   else
     LAST_USER_LINE=1
   fi
 
   if [ -n "$LAST_USER_LINE" ]; then
-    # Extract text responses
-    TRANSCRIPT_TEXT=$(tail -n +"$LAST_USER_LINE" "$TRANSCRIPT" | jq -s '[.[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") | .text] | join("\n\n")' -r 2>/dev/null)
+    # Extract text + tool_use summaries + Edit diffs in order
+    TRANSCRIPT_TEXT=$(tail -n +"$LAST_USER_LINE" "$TRANSCRIPT" | jq -s '
+      # Index structuredPatch results by tool_use_id
+      ([.[] | select(.type == "user" and (.toolUseResult | type) == "object" and .toolUseResult.structuredPatch) |
+        {key: (.toolUseResult.tool_use_id // ""), value: .toolUseResult}] | from_entries) as $patches |
 
-    # Extract Edit diffs from structuredPatch (in tool_result user messages)
-    EDIT_DIFFS=$(tail -n +"$LAST_USER_LINE" "$TRANSCRIPT" | jq -s '
-      [.[] | select(.type == "user" and .toolUseResult.structuredPatch) |
-       .toolUseResult |
-       "\n📝 " + (.filePath | split("/") | last) + "\n```ansi\n" +
-       ([.structuredPatch[].lines[] |
-         if startswith("-") then "\u001b[0;31m" + . + "\u001b[0m"
-         elif startswith("+") then "\u001b[0;32m" + . + "\u001b[0m"
-         else .
-         end
-       ] | join("\n")) +
-       "\n```"
-      ] | join("\n")' -r 2>/dev/null)
-
-    if [ -n "$EDIT_DIFFS" ]; then
-      TRANSCRIPT_TEXT="${TRANSCRIPT_TEXT}${EDIT_DIFFS}"
-    fi
+      # Process assistant messages in order
+      [.[] | select(.type == "assistant") | .message.content[]? |
+        if .type == "text" then .text
+        elif .type == "tool_use" then
+          (if .name == "Bash" then
+            "> `Bash` `" + ((.input.command // "") | split("\n")[0] | .[0:80]) + "`"
+          elif .name == "Read" then
+            "> `Read` " + ((.input.file_path // "") | split("/") | .[-2:] | join("/"))
+          elif .name == "Write" then
+            "> `Write` " + ((.input.file_path // "") | split("/") | last)
+          elif .name == "Glob" then
+            "> `Glob` `" + (.input.pattern // "") + "`"
+          elif .name == "Grep" then
+            "> `Grep` `" + (.input.pattern // "") + "`" + (if .input.path then " in " + (.input.path | split("/") | last) else "" end)
+          elif .name == "Edit" then
+            "> `Edit` " + ((.input.file_path // "") | split("/") | last) +
+            ($patches[.id] // null | if . then
+              "\n```ansi\n" + ([.structuredPatch[].lines[] |
+                if startswith("-") then "\u001b[0;31m" + . + "\u001b[0m"
+                elif startswith("+") then "\u001b[0;32m" + . + "\u001b[0m"
+                else . end] | join("\n")) + "\n```"
+            else "" end)
+          elif .name == "Agent" then
+            "> `Agent` " + (.input.description // .name)
+          else
+            "> `" + .name + "`"
+          end)
+        else empty end
+      ] | join("\n\n")' -r 2>/dev/null)
   fi
 fi
 
@@ -151,26 +166,41 @@ if [ "$EVENT_LOG" = "true" ]; then
   record_event &
 fi
 
-# ── Send to Discord ──
+# ── Send message (platform-aware) ──
 
-send_message() {
-  local text="$1"
-  curl -s -X POST \
-    "https://discord.com/api/v10/channels/${CHAT_ID}/messages" \
-    -H "Authorization: Bot ${BOT_TOKEN}" \
-    -H "Content-Type: application/json" \
-    --data-raw "$(jq -n --arg content "$text" '{content: $content}')" > /dev/null 2>&1
+PLUGIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$PLUGIN_DIR/hooks/platform-send.sh"
+
+_send() {
+  send_message "$CHAT_ID" "$1"
 }
 
 MSG_LEN=${#RESPONSE}
 if [ "$MSG_LEN" -le 2000 ]; then
-  send_message "$RESPONSE"
+  _send "$RESPONSE"
 else
-  OFFSET=0
-  while [ "$OFFSET" -lt "$MSG_LEN" ]; do
-    CHUNK="${RESPONSE:$OFFSET:2000}"
-    send_message "$CHUNK"
-    OFFSET=$((OFFSET + 2000))
+  REMAINING="$RESPONSE"
+  while [ -n "$REMAINING" ]; do
+    if [ ${#REMAINING} -le 2000 ]; then
+      _send "$REMAINING"
+      break
+    fi
+    # Find last newline within 2000 chars
+    CHUNK="${REMAINING:0:2000}"
+    LAST_NL=$(printf '%s' "$CHUNK" | grep -bo $'\n' | tail -1 | cut -d: -f1)
+    if [ -n "$LAST_NL" ] && [ "$LAST_NL" -gt 100 ]; then
+      CHUNK="${REMAINING:0:$LAST_NL}"
+      REMAINING="${REMAINING:$((LAST_NL+1))}"
+    else
+      REMAINING="${REMAINING:2000}"
+    fi
+    # Count ``` fences — odd means code block is open
+    BACKTICK_COUNT=$(printf '%s' "$CHUNK" | grep -o '```' | wc -l | tr -d ' ')
+    if [ $((BACKTICK_COUNT % 2)) -eq 1 ]; then
+      CHUNK="${CHUNK}"$'\n'"\`\`\`"
+      REMAINING="\`\`\`"$'\n'"${REMAINING}"
+    fi
+    _send "$CHUNK"
     sleep 0.3
   done
 fi
@@ -180,7 +210,7 @@ CRON_MARKER="/tmp/cron-marker-${SESSION_ID}"
 if [ -f "$CRON_MARKER" ] && [ -n "$LOG_THREAD" ] && [ "$CHAT_ID" != "$LOG_THREAD" ]; then
   SAVE_CHAT_ID="$CHAT_ID"
   CHAT_ID="$LOG_THREAD"
-  send_message "[cron → ${SAVE_CHAT_ID}] ${RESPONSE:0:1900}"
+  _send "[cron → ${SAVE_CHAT_ID}] ${RESPONSE:0:1900}"
   CHAT_ID="$SAVE_CHAT_ID"
   rm -f "$CRON_MARKER"
 fi

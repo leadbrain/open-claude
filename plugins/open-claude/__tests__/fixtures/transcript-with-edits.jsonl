@@ -1,0 +1,4 @@
+{"type":"user","message":{"content":[{"type":"text","text":"fix the bug"}]},"permissionMode":"default"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I'll fix that."},{"type":"tool_use","id":"tu_edit1","name":"Edit","input":{"file_path":"/home/user/project/server.ts","old_string":"const x = 1","new_string":"const x = 2"}}]}}
+{"type":"user","toolUseResult":{"tool_use_id":"tu_edit1","structuredPatch":[{"lines":[" line before","-const x = 1","+const x = 2"," line after"]}],"filePath":"/home/user/project/server.ts"}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed the bug. Changed x from 1 to 2."}]}}
