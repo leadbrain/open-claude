@@ -8,6 +8,9 @@ import {
   type Access,
   type GateInput,
 } from '../lib.ts'
+import { matchesCron, loadFeatures } from '../core.ts'
+import { join } from 'path'
+import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 
 // ── chunk() ──
 
@@ -281,5 +284,75 @@ describe('gatePure', () => {
 describe('constants', () => {
   test('MAX_CHUNK_LIMIT is 2000', () => {
     expect(MAX_CHUNK_LIMIT).toBe(2000)
+  })
+})
+
+// ── matchesCron() ──
+
+describe('matchesCron', () => {
+  test('matches exact time', () => {
+    const now = new Date(2026, 3, 5, 21, 30)  // Apr 5, 21:30
+    expect(matchesCron('30 21 * * *', now)).toBe(true)
+  })
+
+  test('rejects wrong minute', () => {
+    const now = new Date(2026, 3, 5, 21, 31)
+    expect(matchesCron('30 21 * * *', now)).toBe(false)
+  })
+
+  test('rejects wrong hour', () => {
+    const now = new Date(2026, 3, 5, 20, 30)
+    expect(matchesCron('30 21 * * *', now)).toBe(false)
+  })
+
+  test('wildcard matches any value', () => {
+    const now = new Date(2026, 3, 5, 14, 0)
+    expect(matchesCron('0 * * * *', now)).toBe(true)  // every hour at :00
+  })
+
+  test('matches day of week', () => {
+    const sun = new Date(2026, 3, 5, 20, 0)  // Apr 5 2026 = Sunday (0), 20:00
+    expect(matchesCron('0 20 * * 0', sun)).toBe(true)
+  })
+
+  test('rejects wrong day of week', () => {
+    const mon = new Date(2026, 3, 6, 20, 0)  // Monday (1), 20:00
+    expect(matchesCron('0 20 * * 0', mon)).toBe(false)
+  })
+
+  test('comma-separated values', () => {
+    const now = new Date(2026, 3, 5, 9, 0)
+    expect(matchesCron('0 9,12,15,18,21 * * *', now)).toBe(true)
+    const now2 = new Date(2026, 3, 5, 10, 0)
+    expect(matchesCron('0 9,12,15,18,21 * * *', now2)).toBe(false)
+  })
+
+  test('invalid expression returns false', () => {
+    const now = new Date()
+    expect(matchesCron('invalid', now)).toBe(false)
+    expect(matchesCron('', now)).toBe(false)
+  })
+})
+
+// ─��� loadFeatures() ──
+
+describe('loadFeatures', () => {
+  const tmpDir = join(import.meta.dir, '.tmp-features-test')
+
+  test('returns empty object when file missing', () => {
+    expect(loadFeatures('/nonexistent/path')).toEqual({})
+  })
+
+  test('loads valid features.json', () => {
+    mkdirSync(join(tmpDir, 'memory'), { recursive: true })
+    writeFileSync(join(tmpDir, 'memory', 'features.json'), JSON.stringify({
+      'conversation-analysis': { enabled: true, schedule: '30 21 * * *', targetChannel: '123' },
+      'qmd': { enabled: false },
+    }))
+    const features = loadFeatures(tmpDir)
+    expect(features['conversation-analysis'].enabled).toBe(true)
+    expect(features['conversation-analysis'].schedule).toBe('30 21 * * *')
+    expect(features['qmd'].enabled).toBe(false)
+    rmSync(tmpDir, { recursive: true })
   })
 })

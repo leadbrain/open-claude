@@ -573,3 +573,78 @@ describe('Flow: unknown MCP tool', () => {
     expect(result.content[0].text).toContain('unknown tool')
   })
 })
+
+// ═════════���════════════════════════════════════════════════════
+// Flow 13: Bot self-message — scheduled trigger
+// ═══════════════════════��═════════════════════════════════���════
+
+describe('Flow: scheduled trigger (bot self-message)', () => {
+  test('[scheduled] message from bot is processed', async () => {
+    const accessFile = join(tmpDir, '.claude', 'discord', 'access.json')
+    const access = defaultAccess()
+    access.groups = { '100000000000': { requireMention: false, allowFrom: [] } }
+    writeFileSync(accessFile, JSON.stringify(access))
+
+    const core = await createCore()
+    const msg = makeMessage({
+      content: '[scheduled] /conversation-analysis',
+      isBot: true,
+      authorId: 'bot-123',  // matches MockAdapter.getBotId()
+      mentionsBot: false,
+    })
+
+    await core.handleInbound(msg)
+
+    // Should be processed — typing sent
+    expect(adapter.typingChannels.length).toBeGreaterThanOrEqual(1)
+  })
+
+  test('non-scheduled bot message is dropped', async () => {
+    const accessFile = join(tmpDir, '.claude', 'discord', 'access.json')
+    const access = defaultAccess()
+    access.groups = { '100000000000': { requireMention: false, allowFrom: [] } }
+    writeFileSync(accessFile, JSON.stringify(access))
+
+    const core = await createCore()
+    const msg = makeMessage({
+      content: 'hello from another bot',
+      isBot: true,
+      authorId: 'other-bot',
+      mentionsBot: false,
+    })
+
+    await core.handleInbound(msg)
+
+    expect(adapter.typingChannels).toHaveLength(0)
+  })
+
+  test('bot message without [scheduled] prefix is dropped even from self', async () => {
+    const accessFile = join(tmpDir, '.claude', 'discord', 'access.json')
+    const access = defaultAccess()
+    access.groups = { '100000000000': { requireMention: false, allowFrom: [] } }
+    writeFileSync(accessFile, JSON.stringify(access))
+
+    const core = await createCore()
+    const msg = makeMessage({
+      content: 'just a normal message',
+      isBot: true,
+      authorId: 'bot-123',
+      mentionsBot: false,
+    })
+
+    await core.handleInbound(msg)
+
+    expect(adapter.typingChannels).toHaveLength(0)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// Flow 14: Scheduler — startScheduler
+// ══════════════════════════════════════════════════════════════
+
+describe('Flow: startScheduler', () => {
+  test('startScheduler does not throw', async () => {
+    const core = await createCore()
+    expect(() => core.startScheduler()).not.toThrow()
+  })
+})

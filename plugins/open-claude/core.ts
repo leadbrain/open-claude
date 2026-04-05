@@ -12,6 +12,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { randomBytes } from 'crypto'
+import { execSync } from 'child_process'
 import {
   readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync,
   statSync, renameSync, realpathSync, existsSync,
@@ -133,6 +134,32 @@ export interface OpenClaudeCore {
   handleInbound(msg: PlatformMessage): Promise<void>
   /** Exposed for testing — run the gate check */
   gate(msg: PlatformMessage): Promise<GateResult>
+  /** Start the built-in scheduler for optional features */
+  startScheduler(): void
+}
+
+// ── Scheduler types ──
+
+export interface ScheduledFeature {
+  enabled: boolean
+  schedule?: string       // cron expression: "30 21 * * *"
+  targetChannel?: string  // Discord channel/thread ID for results
+}
+
+export function loadFeatures(workspace: string): Record<string, ScheduledFeature> {
+  try {
+    return JSON.parse(readFileSync(join(workspace, 'memory', 'features.json'), 'utf8'))
+  } catch { return {} }
+}
+
+/** Match a simple cron expression (min hour dom mon dow) against a Date */
+export function matchesCron(expr: string, now: Date): boolean {
+  const parts = expr.trim().split(/\s+/)
+  if (parts.length !== 5) return false
+  const vals = [now.getMinutes(), now.getHours(), now.getDate(), now.getMonth() + 1, now.getDay()]
+  return parts.every((field, i) =>
+    field === '*' || field.split(',').some(f => parseInt(f, 10) === vals[i])
+  )
 }
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
@@ -238,6 +265,10 @@ export function createOpenClaude(
 
   // ── MCP Tools ──
 
+  // QMD search — conditionally available
+  const QMD_PATH = '/opt/homebrew/bin/qmd'
+  const qmdAvailable = existsSync(QMD_PATH)
+
   mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
       {
@@ -304,6 +335,21 @@ export function createOpenClaude(
           required: ['channel'],
         },
       },
+      // QMD search — only when binary is available
+      ...(qmdAvailable ? [{
+        name: 'search',
+        description: 'Search conversation history and user context using QMD (BM25 keyword, semantic, or vector search).',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            query: { type: 'string', description: 'Search query text.' },
+            collection: { type: 'string', enum: ['sessions', 'user', 'all'], description: 'Collection to search (default: all).' },
+            mode: { type: 'string', enum: ['search', 'query', 'vsearch'], description: 'Search mode: search (BM25), query (semantic+reranking), vsearch (vector). Default: search.' },
+            limit: { type: 'number', description: 'Max results (default: 5).' },
+          },
+          required: ['query'],
+        },
+      }] : []),
     ],
   }))
 
@@ -383,6 +429,20 @@ export function createOpenClaude(
           return { content: [{ type: 'text', text: 'download_attachment requires platform-specific implementation' }] }
         }
 
+        case 'search': {
+          if (!qmdAvailable) {
+            return { content: [{ type: 'text', text: 'QMD not available' }], isError: true }
+          }
+          const query = (args.query as string).replace(/"/g, '\\"')
+          const collection = (args.collection as string) ?? 'all'
+          const mode = (args.mode as string) ?? 'search'
+          const limit = (args.limit as number) ?? 5
+          const collectionArg = collection === 'all' ? '' : `-c ${collection}`
+          const cmd = `${QMD_PATH} ${mode} ${collectionArg} -n ${limit} "${query}"`
+          const result = execSync(cmd, { encoding: 'utf8', timeout: 15000 })
+          return { content: [{ type: 'text', text: result || '(no results)' }] }
+        }
+
         default:
           return { content: [{ type: 'text', text: `unknown tool: ${req.params.name}` }], isError: true }
       }
@@ -395,6 +455,15 @@ export function createOpenClaude(
   // ── Inbound message handler ──
 
   async function handleInbound(msg: PlatformMessage): Promise<void> {
+    // Bot message filter — allow own [scheduled] messages, drop all others
+    if (msg.isBot) {
+      if (msg.authorId === adapter.getBotId() && msg.content.startsWith('[scheduled]')) {
+        // Scheduled trigger from self — pass through
+      } else {
+        return
+      }
+    }
+
     // Thread-scoped: only handle assigned thread
     if (config.threadChannel && msg.channelId !== config.threadChannel) return
 
@@ -467,5 +536,31 @@ export function createOpenClaude(
     })
   }
 
-  return { mcp, accessManager, handleInbound, gate }
+  // ── Scheduler ──
+
+  function startScheduler(): void {
+    // Check every 60 seconds for scheduled features
+    setInterval(() => {
+      const features = loadFeatures(config.workspace)
+      const now = new Date()
+      for (const [name, feat] of Object.entries(features)) {
+        if (!feat.enabled || !feat.schedule || !feat.targetChannel) continue
+        if (!matchesCron(feat.schedule, now)) continue
+
+        // Only fire if this instance owns the target channel
+        const isMyChannel = config.threadChannel
+          ? config.threadChannel === feat.targetChannel
+          : feat.targetChannel === config.mainChannel
+        if (!isMyChannel) continue
+
+        adapter.sendMessage(feat.targetChannel, {
+          content: `[scheduled] /${name}`,
+        }).catch(err => {
+          process.stderr.write(`open-claude: scheduler ${name} failed: ${err}\n`)
+        })
+      }
+    }, 60_000).unref()
+  }
+
+  return { mcp, accessManager, handleInbound, gate, startScheduler }
 }

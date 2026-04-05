@@ -177,9 +177,61 @@ Ask if the user wants to configure any optional features:
 >
 > Want to set up any of these? Or you're all set!
 
+## Step 8: CLAUDE.md & optional features
+
+Ask the user:
+
+> **Would you like to set up a CLAUDE.md template?**
+> This gives Claude persistent context about your preferences across sessions.
+> It can also be auto-updated by the conversation-analysis feature.
+
+If yes:
+
+1. Copy the template from the plugin:
+   ```bash
+   cat ${CLAUDE_PLUGIN_ROOT}/templates/CLAUDE.md
+   ```
+   Write it to the workspace root as `CLAUDE.md` (don't overwrite if one exists — ask first).
+
+2. Ask for basic profile info:
+   - Name (or leave blank)
+   - Timezone (e.g., America/New_York, Asia/Seoul)
+   - Preferred communication style (concise/detailed/casual/formal)
+
+3. Fill in the placeholders in the template with the provided values.
+
+4. Create `memory/features.json` with all features disabled:
+   ```json
+   {
+     "conversation-analysis": { "enabled": false },
+     "qmd": { "enabled": false }
+   }
+   ```
+
+5. Create initial `memory/user-context.json`:
+   ```json
+   {
+     "profile": { "name": "<provided>", "timezone": "<provided>", "language": "en" },
+     "interests": [],
+     "communication_preferences": { "tone": "<provided>", "detail_level": "", "autonomy_level": "" },
+     "recent_context": { "period": "", "today": [], "yesterday": [], "ongoing": [] },
+     "updated_at": "<now>"
+   }
+   ```
+
+6. Mention available features:
+   > **Optional features you can enable later:**
+   > - `conversation-analysis` — daily conversation summary + auto-update CLAUDE.md context
+   > - `qmd` — index and search your conversation history
+   >
+   > Enable with: `/open-claude:configure features enable <name>`
+
+If no, skip to the end.
+
 ## Important
 
 - Always mask tokens (show only first 6 chars)
 - Set file permissions: directory 700, .env file 600
 - Use the current working directory as DISCORD_WORKSPACE
 - Be encouraging — this is their first experience with the plugin
+- Don't overwrite existing CLAUDE.md without asking

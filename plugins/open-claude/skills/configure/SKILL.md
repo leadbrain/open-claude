@@ -77,8 +77,52 @@ Maps to env vars:
 2. Delete `.claude/discord.env`
 3. Confirm
 
+### `features` — manage optional features
+
+Dispatch based on subcommand:
+
+### `features list` — show available features
+
+Read `memory/features.json` (create with `{}` if missing). Show:
+
+| Feature | Status | Schedule | Channel |
+|---------|--------|----------|---------|
+| conversation-analysis | enabled/disabled | cron expression or — | channel ID or — |
+| qmd | enabled/disabled | — | — |
+
+For `qmd`, also check if `/opt/homebrew/bin/qmd` exists and note if missing.
+
+### `features enable <name> [--channel <id>] [--schedule <cron>]`
+
+1. Read `memory/features.json` (create if missing)
+2. Based on feature name:
+
+**conversation-analysis**:
+- Requires `--channel <id>` (Discord thread/channel for results)
+- Default schedule: `30 21 * * *` (21:30 daily)
+- Set `{ "enabled": true, "schedule": "<cron>", "targetChannel": "<id>" }`
+- Create `memory/user-context.json` if it doesn't exist (initial empty structure)
+- Output: "Conversation analysis enabled. Results will be posted to <channel> at <schedule>."
+- Remind: "Restart Claude Code for the scheduler to pick up changes."
+
+**qmd**:
+- Check `/opt/homebrew/bin/qmd` exists — if not, warn and stop
+- Set `{ "enabled": true }`
+- Output: "QMD search enabled. The `search` tool is now available. Run `/qmd-index` to index existing conversations."
+- Remind: "Restart Claude Code for the search tool to appear."
+
+3. Write updated `memory/features.json`
+
+### `features disable <name>`
+
+1. Read `memory/features.json`
+2. Set `enabled: false` for the feature
+3. Write
+4. Confirm: "<name> disabled. Restart Claude Code to apply."
+
 ## Important
 
 - Never show the full bot token
 - Always preserve file permissions (600 for .env, 700 for directory)
 - After any change, remind: "Restart Claude Code to apply changes."
+- For features, always validate the feature name against the known list
