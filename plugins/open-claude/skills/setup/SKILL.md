@@ -64,9 +64,14 @@ Read `.mcp.json` in the workspace root. If it has an `open-claude` entry:
 
 If no config exists, continue to Step 3.
 
-## Step 3: Discord bot creation guide
+## Step 3: Platform selection
 
-Tell the user:
+Ask:
+> **Which messaging platform?**
+> 1. **Discord** (default)
+> 2. **Lark (Feishu)**
+
+### Discord
 
 > **Create a Discord bot (if you haven't already):**
 >
@@ -85,15 +90,34 @@ Tell the user:
 
 Then wait for the user's response. The token typically starts with letters and contains two dots.
 
+### Lark (Feishu)
+
+> **Create a Lark app:**
+>
+> 1. Go to [Lark Developer Console](https://open.larksuite.com/app)
+> 2. Create New App → get **App ID** and **App Secret**
+> 3. Under **Event Subscriptions**, set the webhook URL to `http://your-server:9876` (or configure LARK_EVENT_PORT)
+> 4. Subscribe to events: `im.message.receive_v1`
+> 5. Under **Permissions**, add: `im:message`, `im:message:send_as_bot`, `im:resource`
+> 6. Under **Bot**, enable the bot capability
+>
+> **Paste your App ID and App Secret when ready.**
+
+Then wait for both values.
+
 ## Step 4: Save configuration
 
-Ask for the **main channel ID**:
-> To get a channel ID: right-click the channel in Discord → **Copy Channel ID**
-> (Enable Developer Mode in Discord Settings → App Settings → Advanced if you don't see this option)
+Ask for the **main channel/chat ID**:
 
-Once both token and channel ID are provided:
+For Discord:
+> Right-click the channel in Discord → **Copy Channel ID**
 
-1. Write the workspace `.mcp.json`. A persistent HTTP server handles Discord; Claude Code connects via a lightweight stdio proxy:
+For Lark:
+> Open the chat, click the chat name → **Copy Chat ID** from the URL or settings
+
+Once credentials and channel ID are provided:
+
+1. Write the workspace `.mcp.json`:
 
 ```json
 {
@@ -104,7 +128,7 @@ Once both token and channel ID are provided:
       "env": {
         "OPEN_CLAUDE_SERVER": "http://localhost:3100",
         "DISCORD_MAIN_CHANNEL": "<channel_id>",
-        "DISCORD_BOT_TOKEN": "<token>",
+        "DISCORD_BOT_TOKEN": "<token (Discord) or empty (Lark)>",
         "OPEN_CLAUDE_WORKSPACE": "<workspace path (pwd)>"
       }
     }
@@ -118,9 +142,20 @@ Once both token and channel ID are provided:
 
 2. Create `.claude/discord.env` (needed by the HTTP server process and hooks):
 
+For Discord:
 ```
 DISCORD_BOT_TOKEN=<token>
 DISCORD_MAIN_CHANNEL=<channel_id>
+OPEN_CLAUDE_WORKSPACE=<workspace path (pwd)>
+```
+
+For Lark:
+```
+OPEN_CLAUDE_PLATFORM=lark
+LARK_APP_ID=<app_id>
+LARK_APP_SECRET=<app_secret>
+LARK_VERIFICATION_TOKEN=<verification_token>
+DISCORD_MAIN_CHANNEL=<chat_id>
 OPEN_CLAUDE_WORKSPACE=<workspace path (pwd)>
 ```
 

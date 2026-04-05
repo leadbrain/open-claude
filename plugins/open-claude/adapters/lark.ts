@@ -144,6 +144,14 @@ export class LarkAdapter implements PlatformAdapter {
     })
   }
 
+  async removeReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
+    await this.ensureToken()
+    // Lark: delete reaction by type
+    await this.api('DELETE', `/im/v1/messages/${messageId}/reactions`, {
+      reaction_type: { emoji_type: emoji },
+    })
+  }
+
   async sendTyping(channelId: string): Promise<void> {
     // Lark has no typing indicator. Send/update a "thinking..." message instead.
     const existing = this.thinkingMessages.get(channelId)

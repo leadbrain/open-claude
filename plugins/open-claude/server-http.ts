@@ -23,6 +23,8 @@ import {
   type OpenClaudeConfig,
 } from './core.ts'
 import { DiscordAdapter } from './adapters/discord.ts'
+import { LarkAdapter } from './adapters/lark.ts'
+import type { PlatformAdapter } from './platform.ts'
 import { gatePure, pruneExpired, defaultAccess, chunk, MAX_CHUNK_LIMIT, type GateInput, type Access } from './lib.ts'
 import type { PlatformMessage, PlatformAttachment } from './platform.ts'
 import {
@@ -34,15 +36,31 @@ import { execSync } from 'child_process'
 
 // ── Configuration ──
 
-const TOKEN = process.env.DISCORD_BOT_TOKEN
-if (!TOKEN) {
-  process.stderr.write('open-claude: DISCORD_BOT_TOKEN required\n')
-  process.exit(1)
-}
-
+const PLATFORM = process.env.OPEN_CLAUDE_PLATFORM ?? 'discord'
 const PORT = parseInt(process.env.OPEN_CLAUDE_PORT ?? '3100', 10)
 const config = configFromEnv()
-const adapter = new DiscordAdapter()
+
+// Platform adapter selection
+let adapter: PlatformAdapter
+let TOKEN: string
+
+if (PLATFORM === 'lark') {
+  TOKEN = process.env.LARK_APP_SECRET ?? ''
+  if (!TOKEN || !process.env.LARK_APP_ID) {
+    process.stderr.write('open-claude: LARK_APP_ID and LARK_APP_SECRET required for Lark mode\n')
+    process.exit(1)
+  }
+  adapter = new LarkAdapter()
+  process.stderr.write('open-claude: using Lark adapter\n')
+} else {
+  TOKEN = process.env.DISCORD_BOT_TOKEN ?? ''
+  if (!TOKEN) {
+    process.stderr.write('open-claude: DISCORD_BOT_TOKEN required\n')
+    process.exit(1)
+  }
+  adapter = new DiscordAdapter()
+}
+
 const accessManager = new AccessManager(config)
 
 process.on('unhandledRejection', err => {
@@ -169,7 +187,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
       const chatId = body.chat_id as string
       for (const [msgId, ack] of ackedMessages) {
         if (ack.chatId === chatId) {
-          adapter.removeReaction(chatId, msgId, ack.emoji).catch(() => {})
+          adapter.removeReaction?.(chatId, msgId, ack.emoji)?.catch(() => {})
           ackedMessages.delete(msgId)
         }
       }
