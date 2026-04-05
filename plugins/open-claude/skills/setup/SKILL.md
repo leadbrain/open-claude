@@ -14,6 +14,7 @@ allowed-tools:
   - Bash(echo *)
   - Bash(grep *)
   - Bash(cat *)
+  - Bash(jq *)
 ---
 
 # /open-claude:setup — Interactive Setup Wizard
@@ -56,12 +57,12 @@ If both are installed, say so and move on.
 
 ## Step 2: Check existing configuration
 
-Read `.claude/discord.env` (in the current workspace). If it exists and has a token:
-- Show status (mask the token: first 6 chars + `...`)
+Read `.mcp.json` in the workspace root. If it has an `open-claude` entry:
+- Show status (mask the token: first 6 chars + `...`, show mode: stdio/http)
 - Ask: "Already configured! Want to reconfigure, or skip to pairing?"
-- If skip → jump to Step 5
+- If skip → jump to Step 6
 
-If no `.env` exists, continue to Step 3.
+If no config exists, continue to Step 3.
 
 ## Step 3: Discord bot creation guide
 
@@ -84,17 +85,56 @@ Tell the user:
 
 Then wait for the user's response. The token typically starts with letters and contains two dots.
 
-## Step 4: Save configuration
+## Step 4: Connection mode
 
-When the user provides a token:
+Ask for the **main channel ID**:
+> To get a channel ID: right-click the channel in Discord → **Copy Channel ID**
+> (Enable Developer Mode in Discord Settings → App Settings → Advanced if you don't see this option)
 
-1. Ask for the **main channel ID**:
-   > To get a channel ID: right-click the channel in Discord → **Copy Channel ID**
-   > (Enable Developer Mode in Discord Settings → App Settings → Advanced if you don't see this option)
+Then ask which connection mode to use:
 
-2. Once both are provided, add the config to the **workspace `.mcp.json`** as environment variables.
+> **Connection mode:**
+> 1. **HTTP (recommended)** — Single persistent server process. One Discord connection shared by all sessions. Start with `./start-http.sh`.
+> 2. **Stdio** — Each Claude Code session runs its own MCP server + Discord connection. Simpler but creates multiple gateway connections. Start with `./start.sh`.
+>
+> Which mode? (1 or 2, default: 1)
 
-Read the existing `.mcp.json` in the workspace root. If it doesn't exist, create it. Add the `env` field to the open-claude MCP server entry:
+## Step 5: Save configuration
+
+Based on the chosen mode, write the workspace `.mcp.json`:
+
+### HTTP mode (recommended)
+
+```json
+{
+  "mcpServers": {
+    "open-claude": {
+      "url": "http://localhost:3100/mcp"
+    }
+  }
+}
+```
+
+Also create `.claude/discord.env` with the bot token and settings (needed by the HTTP server process and hooks):
+
+```
+DISCORD_BOT_TOKEN=<token>
+DISCORD_MAIN_CHANNEL=<channel_id>
+OPEN_CLAUDE_WORKSPACE=<workspace path (pwd)>
+```
+
+Set permissions:
+```bash
+chmod 600 .claude/discord.env
+```
+
+Copy start script:
+```bash
+cp ${CLAUDE_PLUGIN_ROOT}/scripts/start-http.sh ./start-http.sh
+chmod +x ./start-http.sh
+```
+
+### Stdio mode
 
 ```json
 {
@@ -112,48 +152,77 @@ Read the existing `.mcp.json` in the workspace root. If it doesn't exist, create
 }
 ```
 
-**Important**: If `.mcp.json` already exists with other MCP servers, MERGE — don't overwrite. Only add/update the `open-claude` entry.
-
-Also create runtime directories:
-```bash
-mkdir -p .claude/discord memory/threads memory/events
-```
-
-3. Add `.mcp.json` to `.gitignore` (contains token):
-```bash
-echo '.mcp.json' >> .gitignore
-```
-
-4. Copy `start.sh` to the workspace:
+Copy start script:
 ```bash
 cp ${CLAUDE_PLUGIN_ROOT}/scripts/start.sh ./start.sh
 chmod +x ./start.sh
 ```
 
-5. Confirm:
-   > Configuration saved!
+### Common steps (both modes)
 
-## Step 5: Launch guide
+**Important**: If `.mcp.json` already exists with other MCP servers, MERGE — don't overwrite. Only add/update the `open-claude` entry.
 
-Tell the user:
+Create runtime directories:
+```bash
+mkdir -p .claude/discord memory/threads memory/events
+```
 
-> **To start the Discord connection, exit Claude Code and run:**
+Create initial `access.json` with the main channel registered:
+```bash
+cat > .claude/discord/access.json << EOFACCESS
+{
+  "dmPolicy": "pairing",
+  "allowFrom": [],
+  "groups": {
+    "<main_channel_id>": {
+      "requireMention": true,
+      "allowFrom": []
+    }
+  },
+  "pending": {},
+  "ackReaction": "👀",
+  "chunkMode": "newline"
+}
+EOFACCESS
+chmod 600 .claude/discord/access.json
+```
+
+Add `.mcp.json` to `.gitignore` (contains token in stdio mode):
+```bash
+grep -q '.mcp.json' .gitignore 2>/dev/null || echo '.mcp.json' >> .gitignore
+```
+
+Confirm:
+> Configuration saved!
+
+## Step 6: Launch guide
+
+Based on mode:
+
+### HTTP mode
+> **To start:**
+> ```
+> ./start-http.sh
+> ```
+> This creates a tmux session with:
+> - Window 1: HTTP MCP server (persistent, single Discord connection)
+> - Window 2: Claude Code main session
+>
+> The server must be running before Claude Code can connect.
+
+### Stdio mode
+> **To start:**
 > ```
 > ./start.sh
 > ```
-> This creates a tmux session with the correct flags for Discord channel support.
+> This creates a tmux session with Claude Code and the Discord channel plugin.
 >
 > Alternatively, run directly:
 > ```
 > claude --dangerously-load-development-channels plugin:open-claude@open-claude
 > ```
->
-> **Tip:** Add an alias to your shell profile:
-> ```
-> alias open-claude='claude --dangerously-load-development-channels plugin:open-claude@open-claude'
-> ```
 
-## Step 6: Pairing guide
+## Step 7: Pairing guide
 
 Tell the user:
 
@@ -166,18 +235,18 @@ Tell the user:
 >
 > To find your Discord user ID: enable Developer Mode → right-click your name → Copy User ID
 
-## Step 7: Optional settings
+## Step 8: Optional settings
 
 Ask if the user wants to configure any optional features:
 
-> **Optional features** (add to discord.env):
+> **Optional settings:**
 > - `DISCORD_TMUX_SESSION=<name>` — control Claude from Discord (`/clear`, `/restart`)
-> - `DISCORD_EVENT_LOG=true` — cross-session context sharing
+> - `DISCORD_EVENT_LOG=true` — cross-session context sharing (default: enabled)
 > - `DISCORD_THREAD_MODEL=<model>` — model for thread sessions (default: sonnet)
 >
 > Want to set up any of these? Or you're all set!
 
-## Step 8: CLAUDE.md & optional features
+## Step 9: CLAUDE.md & optional features
 
 Ask the user:
 
@@ -231,7 +300,8 @@ If no, skip to the end.
 ## Important
 
 - Always mask tokens (show only first 6 chars)
-- Set file permissions: directory 700, .env file 600
-- Use the current working directory as DISCORD_WORKSPACE
+- Set file permissions: directory 700, .env file 600, access.json 600
+- Use the current working directory as OPEN_CLAUDE_WORKSPACE
+- **Always create access.json with the main channel in groups** — without this, channel messages are dropped by the gate
 - Be encouraging — this is their first experience with the plugin
 - Don't overwrite existing CLAUDE.md without asking
