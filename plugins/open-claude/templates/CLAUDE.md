@@ -19,14 +19,17 @@ This file provides persistent context for Claude across sessions. Edit freely �
 
 ## Workflows
 
-### Active Features
-<!-- managed by /open-claude:configure features -->
-- [ ] conversation-analysis — daily conversation summary + user context update
-- [ ] qmd — transcript indexing + semantic search
+### Features & Scheduling
+Feature state is stored in `memory/features.json`. Manage with:
+- `/open-claude:configure features list` — show status
+- `/open-claude:configure features enable <name> --channel <id>` — activate
+- `/open-claude:configure features disable <name>` — deactivate
 
-### Cron Schedule
-<!-- updated by /open-claude:configure features enable -->
-(no scheduled features yet)
+Available features:
+- **conversation-analysis** — daily conversation summary, updates `memory/user-context.json` and the Recent Context section below
+- **qmd** — index conversation transcripts for search (requires `/opt/homebrew/bin/qmd`)
+
+The built-in scheduler (in server-http.ts) checks `memory/features.json` every 60 seconds and sends `[scheduled] /<name>` to the target channel when the cron expression matches.
 
 ## Recent Context
 <!-- AUTO:recent-context -->
