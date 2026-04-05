@@ -131,11 +131,12 @@ export class AccessManager {
 export interface OpenClaudeCore {
   mcp: Server
   accessManager: AccessManager
+  /** Deliver a pre-gated message to Claude via MCP notification. Caller handles gate/routing. */
   handleInbound(msg: PlatformMessage): Promise<void>
-  /** Exposed for testing — run the gate check */
+  /** Run the gate check (access control + mention detection) */
   gate(msg: PlatformMessage): Promise<GateResult>
-  /** Start the built-in scheduler for optional features */
-  startScheduler(): void
+  /** Cleanup resources (intervals, etc.) */
+  destroy(): void
 }
 
 // ── Scheduler types ──
@@ -453,34 +454,10 @@ export function createOpenClaude(
   })
 
   // ── Inbound message handler ──
+  // Caller (server-http.ts or server.ts) handles gate, bot filter, and routing.
+  // This function just does dedup + typing + MCP notification delivery.
 
   async function handleInbound(msg: PlatformMessage): Promise<void> {
-    // Bot message filter — allow own [scheduled] messages, drop all others
-    if (msg.isBot) {
-      if (msg.authorId === adapter.getBotId() && msg.content.startsWith('[scheduled]')) {
-        // Scheduled trigger from self — pass through
-      } else {
-        return
-      }
-    }
-
-    // Thread-scoped: only handle assigned thread
-    if (config.threadChannel && msg.channelId !== config.threadChannel) return
-
-    const result = await gate(msg)
-    if (result.action === 'drop') return
-
-    if (result.action === 'pair') {
-      const lead = result.isResend ? 'Still pending' : 'Pairing required'
-      try {
-        await adapter.sendMessage(msg.channelId, {
-          content: `${lead} — approve this pairing from your terminal with the code:\n\n\`${result.code}\``,
-          replyTo: msg.id,
-        })
-      } catch {}
-      return
-    }
-
     const chat_id = msg.channelId
 
     // Message dedup
@@ -504,12 +481,6 @@ export function createOpenClaude(
 
     // Typing indicator
     try { await adapter.sendTyping(chat_id) } catch {}
-
-    // Ack reaction
-    const access = result.access
-    if (access.ackReaction) {
-      try { await adapter.react(chat_id, msg.id, access.ackReaction) } catch {}
-    }
 
     // Format attachment info
     const atts = msg.attachments.map(att => {
@@ -536,31 +507,11 @@ export function createOpenClaude(
     })
   }
 
-  // ── Scheduler ──
+  // ── Lifecycle ──
 
-  function startScheduler(): void {
-    // Check every 60 seconds for scheduled features
-    setInterval(() => {
-      const features = loadFeatures(config.workspace)
-      const now = new Date()
-      for (const [name, feat] of Object.entries(features)) {
-        if (!feat.enabled || !feat.schedule || !feat.targetChannel) continue
-        if (!matchesCron(feat.schedule, now)) continue
-
-        // Only fire if this instance owns the target channel
-        const isMyChannel = config.threadChannel
-          ? config.threadChannel === feat.targetChannel
-          : feat.targetChannel === config.mainChannel
-        if (!isMyChannel) continue
-
-        adapter.sendMessage(feat.targetChannel, {
-          content: `[scheduled] /${name}`,
-        }).catch(err => {
-          process.stderr.write(`open-claude: scheduler ${name} failed: ${err}\n`)
-        })
-      }
-    }, 60_000).unref()
+  function destroy(): void {
+    // Currently no intervals to clear — placeholder for future cleanup
   }
 
-  return { mcp, accessManager, handleInbound, gate, startScheduler }
+  return { mcp, accessManager, handleInbound, gate, destroy }
 }
