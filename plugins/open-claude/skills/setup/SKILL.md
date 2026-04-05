@@ -141,7 +141,7 @@ cat > .claude/discord/access.json << EOFACCESS
   "allowFrom": [],
   "groups": {
     "<main_channel_id>": {
-      "requireMention": true,
+      "requireMention": false,
       "allowFrom": []
     }
   },
