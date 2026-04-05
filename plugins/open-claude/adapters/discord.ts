@@ -95,6 +95,22 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   onMessage(cb: (msg: PlatformMessage) => void): void {
+    // DM workaround: discord.js v14 may not emit messageCreate for DMs
+    // if the DM channel is not in cache. Catch via raw event and fetch.
+    this.client.on('raw', async (event: { t: string; d: any }) => {
+      if (event.t === 'MESSAGE_CREATE' && event.d?.channel_type === 1 && !event.d?.author?.bot) {
+        try {
+          const ch = await this.client.channels.fetch(event.d.channel_id)
+          if (ch && 'messages' in ch) {
+            const msg = await (ch as any).messages.fetch(event.d.id)
+            if (msg && !msg.author.bot) {
+              cb(toPlatformMessage(msg, this.client.user?.id))
+            }
+          }
+        } catch {}
+      }
+    })
+
     this.client.on('messageCreate', msg => {
       if (msg.author.bot) return
       cb(toPlatformMessage(msg, this.client.user?.id))
