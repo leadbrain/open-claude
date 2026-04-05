@@ -1,31 +1,30 @@
 #!/usr/bin/env bun
 /**
- * server-http.ts — Single persistent HTTP MCP server for open-claude.
+ * server-http.ts — Persistent HTTP server for open-claude.
  *
- * One Discord gateway connection. Claude Code sessions connect via
- * StreamableHTTPServerTransport (SSE). Server handles gate, routing,
- * scheduling, thread management, and slash commands.
+ * Single Discord gateway connection. Exposes:
+ *   GET  /events?session=<id>  — SSE stream for proxy to receive Discord messages
+ *   POST /api/register         — Proxy registers itself with a session ID + chat_id
+ *   POST /api/tools            — Proxy forwards tool calls (reply, react, etc.)
+ *   GET  /health               — Server status
  *
- * Start: bun run start:http
- * Connect: .mcp.json → { "url": "http://localhost:3100/mcp" }
+ * Proxy (proxy.ts) connects via stdio to Claude Code and bridges:
+ *   Discord message → SSE → proxy → claude/channel notification → Claude
+ *   Claude tool call → proxy → POST /api/tools → Discord
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'http'
 import { randomUUID } from 'crypto'
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import {
-  createOpenClaude,
   configFromEnv,
   AccessManager,
   loadFeatures,
   matchesCron,
-  type OpenClaudeCore,
   type OpenClaudeConfig,
 } from './core.ts'
 import { DiscordAdapter } from './adapters/discord.ts'
-import { gatePure, pruneExpired, type GateInput } from './lib.ts'
-import type { PlatformMessage } from './platform.ts'
+import { gatePure, pruneExpired, defaultAccess, chunk, MAX_CHUNK_LIMIT, type GateInput, type Access } from './lib.ts'
+import type { PlatformMessage, PlatformAttachment } from './platform.ts'
 import {
   readFileSync, writeFileSync, mkdirSync, existsSync,
   readdirSync, rmSync,
@@ -46,7 +45,6 @@ const config = configFromEnv()
 const adapter = new DiscordAdapter()
 const accessManager = new AccessManager(config)
 
-// Safety net
 process.on('unhandledRejection', err => {
   process.stderr.write(`open-claude: unhandled rejection: ${err}\n`)
 })
@@ -56,21 +54,34 @@ process.on('uncaughtException', err => {
 
 // ── Session Registry ──
 
-const transports = new Map<string, StreamableHTTPServerTransport>()
-const cores = new Map<string, OpenClaudeCore>()
-const chatToSession = new Map<string, string>()
-const sessionToChat = new Map<string, string>()
-const pendingThreads: string[] = []
-let mainSessionId: string | null = null
+interface Session {
+  sessionId: string
+  chatId: string
+  sseRes: ServerResponse | null  // SSE connection from proxy
+}
+
+const sessions = new Map<string, Session>()        // sessionId → Session
+const chatToSession = new Map<string, string>()     // chatId → sessionId
+
+function getSessionByChatId(chatId: string): Session | undefined {
+  const sid = chatToSession.get(chatId)
+  return sid ? sessions.get(sid) : undefined
+}
+
+function sendSSE(session: Session, event: string, data: unknown): boolean {
+  if (!session.sseRes || session.sseRes.writableEnded) return false
+  session.sseRes.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+  return true
+}
 
 // ── HTTP Server ──
 
-async function parseBody(req: IncomingMessage): Promise<unknown> {
+async function parseBody(req: IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
     let data = ''
     req.on('data', chunk => { data += chunk })
     req.on('end', () => {
-      try { resolve(data ? JSON.parse(data) : undefined) }
+      try { resolve(data ? JSON.parse(data) : {}) }
       catch (e) { reject(e) }
     })
     req.on('error', reject)
@@ -78,100 +89,178 @@ async function parseBody(req: IncomingMessage): Promise<unknown> {
 }
 
 const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  // CORS headers for local development
   res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, mcp-session-id')
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
 
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204)
-    res.end()
-    return
-  }
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return }
 
-  // Health check
-  if (req.url === '/health') {
+  const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
+
+  // ── Health ──
+  if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
-      sessions: transports.size,
-      mainSession: mainSessionId ? 'connected' : 'waiting',
-      channels: [...chatToSession.keys()],
+      sessions: sessions.size,
+      channels: [...chatToSession.entries()].map(([c, s]) => ({ chatId: c, sessionId: s.slice(0, 8) })),
     }))
     return
   }
 
-  if (!req.url?.startsWith('/mcp')) {
-    res.writeHead(404)
-    res.end('not found')
+  // ── SSE: proxy connects to receive messages ──
+  if (url.pathname === '/events' && req.method === 'GET') {
+    const sessionId = url.searchParams.get('session')
+    if (!sessionId || !sessions.has(sessionId)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'session not found — call /api/register first' }))
+      return
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    })
+    res.write(`event: connected\ndata: ${JSON.stringify({ sessionId })}\n\n`)
+
+    const session = sessions.get(sessionId)!
+    session.sseRes = res
+
+    // Keepalive
+    const keepalive = setInterval(() => {
+      if (res.writableEnded) { clearInterval(keepalive); return }
+      res.write(': keepalive\n\n')
+    }, 15000)
+
+    req.on('close', () => {
+      clearInterval(keepalive)
+      session.sseRes = null
+      process.stderr.write(`open-claude: SSE disconnected session=${sessionId.slice(0, 8)}\n`)
+    })
     return
   }
 
-  try {
-    const body = await parseBody(req)
-    const sessionId = req.headers['mcp-session-id'] as string | undefined
+  // ── Register: proxy tells server which chat_id it handles ──
+  if (url.pathname === '/api/register' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req)
+      const chatId = body.chat_id as string
+      const sessionId = body.session_id as string || randomUUID()
 
-    // New session initialization
-    if (!sessionId && isInitializeRequest(body)) {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid: string) => {
-          transports.set(sid, transport)
+      // Cleanup old session for this chat_id
+      const oldSid = chatToSession.get(chatId)
+      if (oldSid) {
+        sessions.delete(oldSid)
+      }
 
-          // Bind to channel: first connection = main, pending threads = thread
-          if (!mainSessionId) {
-            mainSessionId = sid
-            chatToSession.set(config.mainChannel, sid)
-            sessionToChat.set(sid, config.mainChannel)
-            process.stderr.write(`open-claude: main session connected (${sid.slice(0, 8)})\n`)
-          } else if (pendingThreads.length > 0) {
-            const chatId = pendingThreads.shift()!
-            chatToSession.set(chatId, sid)
-            sessionToChat.set(sid, chatId)
-            process.stderr.write(`open-claude: thread ${chatId} session connected (${sid.slice(0, 8)})\n`)
-          } else {
-            process.stderr.write(`open-claude: extra session connected (${sid.slice(0, 8)}), unbound\n`)
-          }
-        },
-        onsessionclosed: (sid: string) => {
-          const chatId = sessionToChat.get(sid)
-          if (chatId) chatToSession.delete(chatId)
-          sessionToChat.delete(sid)
-          transports.delete(sid)
-          cores.get(sid)?.destroy()
-          cores.delete(sid)
-          if (mainSessionId === sid) mainSessionId = null
-          process.stderr.write(`open-claude: session closed (${sid.slice(0, 8)}, channel: ${chatId ?? 'unbound'})\n`)
-        },
-      })
+      const session: Session = { sessionId, chatId, sseRes: null }
+      sessions.set(sessionId, session)
+      chatToSession.set(chatId, sessionId)
 
-      const core = createOpenClaude(adapter, config)
-      await core.mcp.connect(transport)
+      process.stderr.write(`open-claude: registered session=${sessionId.slice(0, 8)} chat=${chatId}\n`)
 
-      // Register after connect — sessionId is set by transport
-      const sid = transport.sessionId
-      if (sid) cores.set(sid, core)
-
-      await transport.handleRequest(req, res, body)
-      return
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ sessionId, chatId }))
+    } catch (err) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: String(err) }))
     }
-
-    // Existing session request
-    if (sessionId && transports.has(sessionId)) {
-      await transports.get(sessionId)!.handleRequest(req, res, body)
-      return
-    }
-
-    // Session not found
-    res.writeHead(400, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'invalid or missing session' }))
-  } catch (err) {
-    process.stderr.write(`open-claude: HTTP error: ${err}\n`)
-    if (!res.headersSent) {
-      res.writeHead(500, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'internal error' }))
-    }
+    return
   }
+
+  // ── Tools: proxy forwards Claude's tool calls ──
+  if (url.pathname === '/api/tools' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req)
+      const { tool, args } = body as { tool: string; args: Record<string, unknown> }
+      const result = await handleToolCall(tool, args)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(result))
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: String(err) }))
+    }
+    return
+  }
+
+  res.writeHead(404)
+  res.end('not found')
 })
+
+// ── Tool handler ──
+
+async function handleToolCall(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError?: boolean }> {
+  switch (tool) {
+    case 'reply': {
+      const chatId = args.chat_id as string
+      const text = args.text as string
+      const replyTo = args.reply_to as string | undefined
+      const files = (args.files as string[] | undefined) ?? []
+
+      if (files.length > 10) throw new Error('max 10 attachments')
+
+      const access = accessManager.load()
+      const limit = Math.max(1, Math.min(access.textChunkLimit ?? MAX_CHUNK_LIMIT, MAX_CHUNK_LIMIT))
+      const mode = access.chunkMode ?? 'newline'
+      const replyMode = access.replyToMode ?? 'first'
+      const chunks = chunk(text, limit, mode)
+      const sentIds: string[] = []
+
+      for (let i = 0; i < chunks.length; i++) {
+        const shouldReplyTo = replyTo != null && replyMode !== 'off' && (replyMode === 'all' || i === 0)
+        const id = await adapter.sendMessage(chatId, {
+          content: chunks[i],
+          ...(i === 0 && files.length > 0 ? { files } : {}),
+          ...(shouldReplyTo ? { replyTo } : {}),
+        })
+        sentIds.push(id)
+      }
+
+      return { text: sentIds.length === 1 ? `sent (id: ${sentIds[0]})` : `sent ${sentIds.length} parts` }
+    }
+
+    case 'react': {
+      await adapter.react(args.chat_id as string, args.message_id as string, args.emoji as string)
+      return { text: 'reacted' }
+    }
+
+    case 'edit_message': {
+      await adapter.editMessage(args.chat_id as string, args.message_id as string, args.text as string)
+      return { text: 'edited' }
+    }
+
+    case 'fetch_messages': {
+      const channelId = args.channel as string
+      const limit = Math.min((args.limit as number) ?? 20, 100)
+      const msgs = await adapter.fetchMessages(channelId, limit)
+      const me = adapter.getBotId()
+      const out = msgs.length === 0
+        ? '(no messages)'
+        : msgs.map(m => {
+            const who = m.authorId === me ? 'me' : m.authorName
+            const atts = m.attachmentCount > 0 ? ` +${m.attachmentCount}att` : ''
+            const text = m.content.replace(/[\r\n]+/g, ' \u23CE ')
+            return `[${m.createdAt.toISOString()}] ${who}: ${text}  (id: ${m.id}${atts})`
+          }).join('\n')
+      return { text: out }
+    }
+
+    case 'search': {
+      const qmdPath = '/opt/homebrew/bin/qmd'
+      if (!existsSync(qmdPath)) return { text: 'QMD not available', isError: true }
+      const query = (args.query as string).replace(/"/g, '\\"')
+      const collection = (args.collection as string) ?? 'all'
+      const mode = (args.mode as string) ?? 'search'
+      const limit = (args.limit as number) ?? 5
+      const collectionArg = collection === 'all' ? '' : `-c ${collection}`
+      const result = execSync(`${qmdPath} ${mode} ${collectionArg} -n ${limit} "${query}"`, { encoding: 'utf8', timeout: 15000 })
+      return { text: result || '(no results)' }
+    }
+
+    default:
+      return { text: `unknown tool: ${tool}`, isError: true }
+  }
+}
 
 // ── Discord Message Handler ──
 
@@ -181,12 +270,11 @@ adapter.onMessage(async (msg: PlatformMessage) => {
     if (msg.authorId !== adapter.getBotId() || !msg.content.startsWith('[scheduled]')) return
   }
 
-  // Gate check (single point of access control)
+  // Gate check
   const access = accessManager.load()
   const pruned = pruneExpired(access)
   if (pruned) accessManager.save(access)
 
-  // Mention detection
   let isMentioned = msg.mentionsBot
   if (!isMentioned && msg.reference?.messageId) {
     if (adapter.isReplyToBot) isMentioned = await adapter.isReplyToBot(msg)
@@ -212,11 +300,8 @@ adapter.onMessage(async (msg: PlatformMessage) => {
     const code = randomBytes(3).toString('hex')
     const now = Date.now()
     access.pending[code] = {
-      senderId: msg.authorId,
-      chatId: msg.channelId,
-      createdAt: now,
-      expiresAt: now + 60 * 60 * 1000,
-      replies: 1,
+      senderId: msg.authorId, chatId: msg.channelId,
+      createdAt: now, expiresAt: now + 60 * 60 * 1000, replies: 1,
     }
     accessManager.save(access)
     try {
@@ -247,12 +332,34 @@ adapter.onMessage(async (msg: PlatformMessage) => {
     adapter.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
   }
 
-  // Route to session
-  const sessionId = chatToSession.get(msg.channelId)
-  if (sessionId && cores.has(sessionId)) {
-    await cores.get(sessionId)!.handleInbound(msg).catch(err => {
-      process.stderr.write(`open-claude: handleInbound failed: ${err}\n`)
+  // Route to session via SSE
+  const session = getSessionByChatId(msg.channelId)
+  if (session) {
+    // Send typing
+    adapter.sendTyping(msg.channelId).catch(() => {})
+
+    // Format for channel notification
+    const atts = msg.attachments.map(att => {
+      const kb = (att.size / 1024).toFixed(0)
+      return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
     })
+    const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
+
+    const sent = sendSSE(session, 'message', {
+      content,
+      meta: {
+        chat_id: msg.channelId,
+        message_id: msg.id,
+        user: msg.authorName,
+        user_id: msg.authorId,
+        ts: msg.createdAt.toISOString(),
+        ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
+      },
+    })
+
+    if (!sent) {
+      process.stderr.write(`open-claude: SSE not connected for session=${session.sessionId.slice(0, 8)} ch=${msg.channelId}\n`)
+    }
     return
   }
 
@@ -262,10 +369,7 @@ adapter.onMessage(async (msg: PlatformMessage) => {
     return
   }
 
-  // Main channel but no session yet ��� ignore (waiting for Claude to connect)
-  if (!mainSessionId) {
-    process.stderr.write(`open-claude: no main session, dropping message from ${msg.authorName}\n`)
-  }
+  process.stderr.write(`open-claude: no session for ch=${msg.channelId}, dropping\n`)
 })
 
 // ── Thread Spawning ──
@@ -275,19 +379,17 @@ function spawnThreadSession(msg: PlatformMessage): void {
   const tmuxSession = config.tmuxSession
   const windowName = `thread-${chatId}`
 
-  // Check if tmux window already exists
   try {
     execSync(
       `tmux has-session -t ${tmuxSession} 2>/dev/null && tmux list-windows -t ${tmuxSession} -F "#{window_name}" | grep -q "^${windowName}$"`,
       { timeout: 3000 },
     )
-    return // Already exists
+    return
   } catch {}
 
   process.stderr.write(`open-claude: spawning thread session for ${chatId}\n`)
   adapter.sendTyping(chatId).catch(() => {})
 
-  // Check for existing session to resume
   const threadsDir = join(config.workspace, 'memory', 'threads')
   mkdirSync(threadsDir, { recursive: true })
   const stateFile = join(threadsDir, `${chatId}.json`)
@@ -297,30 +399,24 @@ function spawnThreadSession(msg: PlatformMessage): void {
     if (state.session_id) resumeArg = `--resume ${state.session_id}`
   } catch {}
 
-  // Write first prompt to file
   const promptFile = join(config.workspace, '.claude', 'discord', `prompt-${chatId}.txt`)
   mkdirSync(join(config.workspace, '.claude', 'discord'), { recursive: true })
   const prompt = `<channel source="discord" chat_id="${chatId}" message_id="${msg.id}" user="${msg.authorName}" user_id="${msg.authorId}" ts="${msg.createdAt.toISOString()}">\n${msg.content}\n</channel>`
   writeFileSync(promptFile, prompt)
 
-  // Export env vars for hooks
   const envExports = Object.entries(process.env)
-    .filter(([k]) => k.startsWith('DISCORD_') || k === 'OPEN_CLAUDE_WORKSPACE')
+    .filter(([k]) => k.startsWith('DISCORD_') || k === 'OPEN_CLAUDE_WORKSPACE' || k === 'OPEN_CLAUDE_PORT')
     .map(([k, v]) => `export ${k}='${(v ?? '').replace(/'/g, "'\\''")}'`)
     .join(' && ')
 
   const threadModel = config.threadModel
-  const cmd = `cd '${config.workspace}' && ${envExports} && claude --dangerously-load-development-channels plugin:open-claude@open-claude --model ${threadModel} ${resumeArg} "$(cat '${promptFile}')" && rm -f '${promptFile}'`
+  const cmd = `cd '${config.workspace}' && ${envExports} && export OPEN_CLAUDE_CHAT_ID=${chatId} && claude --dangerously-load-development-channels server:open-claude --model ${threadModel} ${resumeArg} "$(cat '${promptFile}')" && rm -f '${promptFile}'`
 
   try {
     execSync(`tmux new-window -t ${tmuxSession} -n ${windowName} '${cmd.replace(/'/g, "'\\''")}'`, { timeout: 5000 })
-    pendingThreads.push(chatId)
     process.stderr.write(`open-claude: thread ${chatId} tmux window created\n`)
   } catch (err) {
     process.stderr.write(`open-claude: thread spawn failed: ${err}\n`)
-    adapter.sendMessage(chatId, {
-      content: `\u26A0\uFE0F Failed to create thread session.`,
-    }).catch(() => {})
   }
 }
 
@@ -332,7 +428,6 @@ setInterval(() => {
   for (const [name, feat] of Object.entries(features)) {
     if (!feat.enabled || !feat.schedule || !feat.targetChannel) continue
     if (!matchesCron(feat.schedule, now)) continue
-
     adapter.sendMessage(feat.targetChannel, {
       content: `[scheduled] /${name}`,
     }).catch(err => {
@@ -345,17 +440,15 @@ setInterval(() => {
 
 if (!config.staticMode) {
   setInterval(() => {
-    const approvedDir = accessManager.approvedDir
     let files: string[]
-    try { files = readdirSync(approvedDir) } catch { return }
+    try { files = readdirSync(accessManager.approvedDir) } catch { return }
     for (const senderId of files) {
-      const file = join(approvedDir, senderId)
+      const file = join(accessManager.approvedDir, senderId)
       let dmChannelId: string
       try { dmChannelId = readFileSync(file, 'utf8').trim() } catch {
         rmSync(file, { force: true }); continue
       }
       if (!dmChannelId) { rmSync(file, { force: true }); continue }
-
       adapter.sendMessage(dmChannelId, { content: "Paired! Say hi to Claude." })
         .then(() => rmSync(file, { force: true }))
         .catch(() => rmSync(file, { force: true }))
@@ -378,12 +471,8 @@ if (adapter.onInteraction) {
         const chatId = interaction.channelId
         const threadFile = join(config.workspace, 'memory', 'threads', `${chatId}.json`)
         if (existsSync(threadFile)) {
-          try {
-            rmSync(threadFile)
-            await interaction.reply({ content: '\u2705 Session reset.' })
-          } catch (err) {
-            await interaction.reply({ content: `\u26A0\uFE0F Reset failed: ${err}`, ephemeral: true })
-          }
+          try { rmSync(threadFile); await interaction.reply({ content: '\u2705 Session reset.' }) }
+          catch (err) { await interaction.reply({ content: `\u26A0\uFE0F Reset failed: ${err}`, ephemeral: true }) }
         } else {
           await interaction.reply({ content: '\u2139\uFE0F No active session.', ephemeral: true })
         }
@@ -398,28 +487,11 @@ if (adapter.onInteraction) {
       return
     }
 
-    if (['compact', 'restart', 'enter', 'esc'].includes(commandName) && tmux) {
-      const keyMap: Record<string, string> = {
-        compact: '"/compact" Enter',
-        enter: 'Enter',
-        esc: 'Escape',
-      }
-      if (commandName === 'restart') {
-        try {
-          const panePid = execSync(`tmux list-panes -t ${tmux} -F "#{pane_pid}" | head -1`, { timeout: 5000 }).toString().trim()
-          const cmd = execSync(`ps -p ${panePid} -o command=`, { timeout: 5000 }).toString().trim()
-          await interaction.reply({ content: `\uD83D\uDD04 Restarting...\n\`\`\`\n${cmd}\n\`\`\`` })
-          setTimeout(() => {
-            try { execSync(`tmux respawn-pane -k -t ${tmux} '${cmd.replace(/'/g, "'\\''")}'`, { timeout: 5000 }) } catch {}
-          }, 1500)
-        } catch (err) {
-          await interaction.reply({ content: `\u26A0\uFE0F Failed: ${err}`, ephemeral: true })
-        }
-        return
-      }
+    if (['compact', 'enter', 'esc'].includes(commandName) && tmux) {
+      const keyMap: Record<string, string> = { compact: '"/compact" Enter', enter: 'Enter', esc: 'Escape' }
       try {
         execSync(`tmux send-keys -t ${tmux} ${keyMap[commandName]}`, { timeout: 5000 })
-        await interaction.reply({ content: `\u2705 Sent ${commandName} to main session.` })
+        await interaction.reply({ content: `\u2705 Sent ${commandName}.` })
       } catch (err) {
         await interaction.reply({ content: `\u26A0\uFE0F Failed: ${err}`, ephemeral: true })
       }
@@ -434,7 +506,6 @@ function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
   process.stderr.write('open-claude: shutting down HTTP server\n')
-  for (const [, core] of cores) core.destroy()
   httpServer.close()
   setTimeout(() => process.exit(0), 2000)
   void adapter.destroy().finally(() => process.exit(0))
@@ -446,7 +517,6 @@ process.on('SIGINT', shutdown)
 
 adapter.onReady((botId, botName) => {
   process.stderr.write(`open-claude: Discord connected as ${botName}\n`)
-  // Register slash commands
   const discordAdapter = adapter as any
   if (discordAdapter.registerSlashCommands && discordAdapter.getClient) {
     const client = discordAdapter.getClient()
@@ -457,10 +527,8 @@ adapter.onReady((botId, botName) => {
   }
 })
 
-// Start HTTP server first (Claude Code expects immediate handshake)
 httpServer.listen(PORT, '127.0.0.1', () => {
-  process.stderr.write(`open-claude: HTTP MCP server on http://127.0.0.1:${PORT}/mcp\n`)
+  process.stderr.write(`open-claude: HTTP server on http://127.0.0.1:${PORT}\n`)
 })
 
-// Then connect Discord
 await adapter.login(TOKEN)

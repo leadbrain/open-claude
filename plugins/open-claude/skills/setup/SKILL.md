@@ -105,17 +105,27 @@ Based on the chosen mode, write the workspace `.mcp.json`:
 
 ### HTTP mode (recommended)
 
+In HTTP mode, a persistent server handles Discord. Claude Code connects via a lightweight stdio proxy.
+
 ```json
 {
   "mcpServers": {
     "open-claude": {
-      "url": "http://localhost:3100/mcp"
+      "command": "bun",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/proxy.ts"],
+      "env": {
+        "OPEN_CLAUDE_SERVER": "http://localhost:3100",
+        "OPEN_CLAUDE_CHAT_ID": "<channel_id>",
+        "DISCORD_MAIN_CHANNEL": "<channel_id>",
+        "DISCORD_BOT_TOKEN": "<token>",
+        "OPEN_CLAUDE_WORKSPACE": "<workspace path (pwd)>"
+      }
     }
   }
 }
 ```
 
-Also create `.claude/discord.env` with the bot token and settings (needed by the HTTP server process and hooks):
+Also create `.claude/discord.env` with the same settings (needed by the HTTP server process and hooks):
 
 ```
 DISCORD_BOT_TOKEN=<token>
@@ -205,10 +215,10 @@ Based on mode:
 > ./start-http.sh
 > ```
 > This creates a tmux session with:
-> - Window 1: HTTP MCP server (persistent, single Discord connection)
-> - Window 2: Claude Code main session
+> - Window 1: HTTP server (persistent, single Discord connection)
+> - Window 2: Claude Code main session (auto-connects via proxy)
 >
-> The server must be running before Claude Code can connect.
+> The proxy (proxy.ts) bridges between the HTTP server and Claude Code via stdio.
 
 ### Stdio mode
 > **To start:**

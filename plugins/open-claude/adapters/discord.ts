@@ -95,25 +95,28 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   onMessage(cb: (msg: PlatformMessage) => void): void {
-    // DM workaround: discord.js v14 may not emit messageCreate for DMs
-    // if the DM channel is not in cache. Catch via raw event and fetch.
+    // Use raw event as primary handler — discord.js v14 may not emit
+    // messageCreate reliably for DMs or uncached channels.
+    const processed = new Set<string>()
     this.client.on('raw', async (event: { t: string; d: any }) => {
-      if (event.t === 'MESSAGE_CREATE' && event.d?.channel_type === 1 && !event.d?.author?.bot) {
-        try {
-          const ch = await this.client.channels.fetch(event.d.channel_id)
-          if (ch && 'messages' in ch) {
-            const msg = await (ch as any).messages.fetch(event.d.id)
-            if (msg && !msg.author.bot) {
-              cb(toPlatformMessage(msg, this.client.user?.id))
-            }
-          }
-        } catch {}
+      if (event.t !== 'MESSAGE_CREATE' || !event.d?.id || event.d?.author?.bot) return
+      if (processed.has(event.d.id)) return
+      processed.add(event.d.id)
+      if (processed.size > 500) {
+        const first = processed.values().next().value
+        if (first) processed.delete(first)
       }
-    })
-
-    this.client.on('messageCreate', msg => {
-      if (msg.author.bot) return
-      cb(toPlatformMessage(msg, this.client.user?.id))
+      try {
+        const ch = await this.client.channels.fetch(event.d.channel_id)
+        if (ch && 'messages' in ch) {
+          const msg = await (ch as any).messages.fetch(event.d.id)
+          if (msg && !msg.author.bot) {
+            cb(toPlatformMessage(msg, this.client.user?.id))
+          }
+        }
+      } catch (err) {
+        process.stderr.write(`discord-adapter: raw fetch failed: ${err}\n`)
+      }
     })
   }
 
