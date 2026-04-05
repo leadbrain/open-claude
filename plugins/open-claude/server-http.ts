@@ -162,6 +162,26 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     return
   }
 
+  // ── Ack clear: Stop hook notifies response was sent ──
+  if (url.pathname === '/api/ack-clear' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req)
+      const chatId = body.chat_id as string
+      for (const [msgId, ack] of ackedMessages) {
+        if (ack.chatId === chatId) {
+          adapter.removeReaction(chatId, msgId, ack.emoji).catch(() => {})
+          ackedMessages.delete(msgId)
+        }
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true }))
+    } catch {
+      res.writeHead(200)
+      res.end()
+    }
+    return
+  }
+
   // ── Tools: proxy forwards Claude's tool calls ──
   if (url.pathname === '/api/tools' && req.method === 'POST') {
     try {
@@ -260,25 +280,9 @@ async function handleToolCall(tool: string, args: Record<string, unknown>): Prom
 
 adapter.onMessage(async (msg: PlatformMessage) => {
   process.stderr.write(`open-claude: onMessage from=${msg.authorName} ch=${msg.channelId} isBot=${msg.isBot} isDM=${msg.isDM}\n`)
-  // Bot filter
+  // Bot filter — allow own [scheduled] messages only
   if (msg.isBot) {
-    // Own message (response sent by Stop hook) — remove ack reactions
-    if (msg.authorId === adapter.getBotId()) {
-      if (msg.content.startsWith('[scheduled]')) {
-        // Scheduled trigger — process as inbound
-      } else {
-        // Response sent — remove ack emoji from messages in this channel
-        for (const [msgId, ack] of ackedMessages) {
-          if (ack.chatId === msg.channelId) {
-            adapter.removeReaction(msg.channelId, msgId, ack.emoji).catch(() => {})
-            ackedMessages.delete(msgId)
-          }
-        }
-        return
-      }
-    } else {
-      return
-    }
+    if (msg.authorId !== adapter.getBotId() || !msg.content.startsWith('[scheduled]')) return
   }
 
   // Gate check

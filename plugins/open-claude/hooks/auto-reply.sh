@@ -205,6 +205,12 @@ else
   done
 fi
 
+# Remove ack reaction — notify server to clear 👀
+OPEN_CLAUDE_SERVER="${OPEN_CLAUDE_SERVER:-http://localhost:3100}"
+curl -s -X POST "${OPEN_CLAUDE_SERVER}/api/ack-clear" \
+  -H "Content-Type: application/json" \
+  --data-raw "$(jq -n --arg ch "$CHAT_ID" '{chat_id: $ch}')" > /dev/null 2>&1 &
+
 # Cron: copy to log thread
 CRON_MARKER="/tmp/cron-marker-${SESSION_ID}"
 if [ -f "$CRON_MARKER" ] && [ -n "$LOG_THREAD" ] && [ "$CHAT_ID" != "$LOG_THREAD" ]; then
