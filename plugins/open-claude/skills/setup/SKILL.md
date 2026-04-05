@@ -85,27 +85,15 @@ Tell the user:
 
 Then wait for the user's response. The token typically starts with letters and contains two dots.
 
-## Step 4: Connection mode
+## Step 4: Save configuration
 
 Ask for the **main channel ID**:
 > To get a channel ID: right-click the channel in Discord → **Copy Channel ID**
 > (Enable Developer Mode in Discord Settings → App Settings → Advanced if you don't see this option)
 
-Then ask which connection mode to use:
+Once both token and channel ID are provided:
 
-> **Connection mode:**
-> 1. **HTTP (recommended)** — Single persistent server process. One Discord connection shared by all sessions. Start with `./start-http.sh`.
-> 2. **Stdio** — Each Claude Code session runs its own MCP server + Discord connection. Simpler but creates multiple gateway connections. Start with `./start.sh`.
->
-> Which mode? (1 or 2, default: 1)
-
-## Step 5: Save configuration
-
-Based on the chosen mode, write the workspace `.mcp.json`:
-
-### HTTP mode (recommended)
-
-In HTTP mode, a persistent server handles Discord. Claude Code connects via a lightweight stdio proxy.
+1. Write the workspace `.mcp.json`. A persistent HTTP server handles Discord; Claude Code connects via a lightweight stdio proxy:
 
 ```json
 {
@@ -124,7 +112,11 @@ In HTTP mode, a persistent server handles Discord. Claude Code connects via a li
 }
 ```
 
-Also create `.claude/discord.env` with the same settings (needed by the HTTP server process and hooks):
+**Important**: Do NOT put `OPEN_CLAUDE_CHAT_ID` in `.mcp.json` — it is set via shell env per session so threads get their own channel binding.
+
+**Important**: If `.mcp.json` already exists with other MCP servers, MERGE — don't overwrite. Only add/update the `open-claude` entry.
+
+2. Create `.claude/discord.env` (needed by the HTTP server process and hooks):
 
 ```
 DISCORD_BOT_TOKEN=<token>
@@ -132,51 +124,16 @@ DISCORD_MAIN_CHANNEL=<channel_id>
 OPEN_CLAUDE_WORKSPACE=<workspace path (pwd)>
 ```
 
-Set permissions:
 ```bash
 chmod 600 .claude/discord.env
 ```
 
-Copy start script:
-```bash
-cp ${CLAUDE_PLUGIN_ROOT}/scripts/start-http.sh ./start-http.sh
-chmod +x ./start-http.sh
-```
-
-### Stdio mode
-
-```json
-{
-  "mcpServers": {
-    "open-claude": {
-      "command": "bun",
-      "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "--silent", "start"],
-      "env": {
-        "DISCORD_BOT_TOKEN": "<token>",
-        "DISCORD_MAIN_CHANNEL": "<channel_id>",
-        "OPEN_CLAUDE_WORKSPACE": "<workspace path (pwd)>"
-      }
-    }
-  }
-}
-```
-
-Copy start script:
-```bash
-cp ${CLAUDE_PLUGIN_ROOT}/scripts/start.sh ./start.sh
-chmod +x ./start.sh
-```
-
-### Common steps (both modes)
-
-**Important**: If `.mcp.json` already exists with other MCP servers, MERGE — don't overwrite. Only add/update the `open-claude` entry.
-
-Create runtime directories:
+3. Create runtime directories:
 ```bash
 mkdir -p .claude/discord memory/threads memory/events
 ```
 
-Create initial `access.json` with the main channel registered:
+4. Create initial `access.json` with the main channel registered:
 ```bash
 cat > .claude/discord/access.json << EOFACCESS
 {
@@ -196,7 +153,13 @@ EOFACCESS
 chmod 600 .claude/discord/access.json
 ```
 
-Add `.mcp.json` to `.gitignore` (contains token in stdio mode):
+5. Copy start script:
+```bash
+cp ${CLAUDE_PLUGIN_ROOT}/scripts/start-http.sh ./start-http.sh
+chmod +x ./start-http.sh
+```
+
+6. Add `.mcp.json` to `.gitignore` (contains token):
 ```bash
 grep -q '.mcp.json' .gitignore 2>/dev/null || echo '.mcp.json' >> .gitignore
 ```
@@ -204,11 +167,8 @@ grep -q '.mcp.json' .gitignore 2>/dev/null || echo '.mcp.json' >> .gitignore
 Confirm:
 > Configuration saved!
 
-## Step 6: Launch guide
+## Step 5: Launch guide
 
-Based on mode:
-
-### HTTP mode
 > **To start:**
 > ```
 > ./start-http.sh
@@ -217,21 +177,9 @@ Based on mode:
 > - Window 1: HTTP server (persistent, single Discord connection)
 > - Window 2: Claude Code main session (auto-connects via proxy)
 >
-> The proxy (proxy.ts) bridges between the HTTP server and Claude Code via stdio.
+> Thread sessions are spawned automatically when messages arrive in Discord threads.
 
-### Stdio mode
-> **To start:**
-> ```
-> ./start.sh
-> ```
-> This creates a tmux session with Claude Code and the Discord channel plugin.
->
-> Alternatively, run directly:
-> ```
-> claude --dangerously-load-development-channels plugin:open-claude@open-claude
-> ```
-
-## Step 7: Pairing guide
+## Step 6: Pairing guide
 
 Tell the user:
 
@@ -244,7 +192,7 @@ Tell the user:
 >
 > To find your Discord user ID: enable Developer Mode → right-click your name → Copy User ID
 
-## Step 8: Optional settings
+## Step 7: Optional settings
 
 Ask if the user wants to configure any optional features:
 
@@ -255,7 +203,7 @@ Ask if the user wants to configure any optional features:
 >
 > Want to set up any of these? Or you're all set!
 
-## Step 9: CLAUDE.md & optional features
+## Step 8: CLAUDE.md & optional features
 
 Ask the user:
 
