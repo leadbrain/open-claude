@@ -23,9 +23,18 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 
+import { appendFileSync } from 'fs'
+const PROXY_LOG = '/tmp/open-claude-proxy.log'
+function plog(msg: string) {
+  const line = `[${new Date().toISOString()}] proxy: ${msg}\n`
+  process.stderr.write(line)
+  try { appendFileSync(PROXY_LOG, line) } catch {}
+}
+
 const SERVER_URL = process.env.OPEN_CLAUDE_SERVER ?? 'http://localhost:3100'
 const CHAT_ID = process.env.OPEN_CLAUDE_CHAT_ID ?? process.env.DISCORD_MAIN_CHANNEL ?? ''
-const SESSION_ID = `proxy-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+// Fixed session ID per chat — survives proxy restarts by Claude Code
+const SESSION_ID = `proxy-${CHAT_ID}`
 
 if (!CHAT_ID) {
   process.stderr.write('proxy: OPEN_CLAUDE_CHAT_ID or DISCORD_MAIN_CHANNEL required\n')
@@ -153,78 +162,54 @@ async function register(): Promise<void> {
       body: JSON.stringify({ session_id: SESSION_ID, chat_id: CHAT_ID }),
     })
     const data = await res.json() as { sessionId: string }
-    process.stderr.write(`proxy: registered session=${data.sessionId.slice(0, 8)} chat=${CHAT_ID}\n`)
+    plog(`registered session=${data.sessionId.slice(0, 8)} chat=${CHAT_ID}`)
   } catch (err) {
-    process.stderr.write(`proxy: registration failed: ${err}\n`)
+    plog(`registration failed: ${err}`)
     // Retry in 2 seconds
     setTimeout(register, 2000)
     return
   }
 
-  // Start SSE connection
-  connectSSE()
+  // Start polling
+  startPolling()
 }
 
-// ── SSE: receive messages from HTTP server ──
+// ── Polling: fetch messages from HTTP server ──
 
-function connectSSE(): void {
-  process.stderr.write(`proxy: connecting SSE ${SERVER_URL}/events?session=${SESSION_ID}\n`)
+let polling = false
 
-  fetch(`${SERVER_URL}/events?session=${SESSION_ID}`, {
-    headers: { Accept: 'text/event-stream' },
-  }).then(async (res) => {
-    if (!res.ok || !res.body) {
-      process.stderr.write(`proxy: SSE connection failed: ${res.status}\n`)
-      setTimeout(connectSSE, 3000)
+async function pollMessages(): Promise<void> {
+  try {
+    const res = await fetch(`${SERVER_URL}/api/messages?session=${SESSION_ID}`)
+    if (!res.ok) {
+      plog(`poll failed: ${res.status}`)
       return
     }
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      let eventType = ''
-      let data = ''
-      for (const line of lines) {
-        if (line.startsWith('event: ')) {
-          eventType = line.slice(7)
-        } else if (line.startsWith('data: ')) {
-          data = line.slice(6)
-        } else if (line === '' && eventType && data) {
-          // Process event
-          if (eventType === 'message') {
-            try {
-              const parsed = JSON.parse(data)
-              await mcp.notification({
-                method: 'notifications/claude/channel',
-                params: parsed,
-              })
-              process.stderr.write(`proxy: delivered message to Claude from ${parsed.meta?.user}\n`)
-            } catch (err) {
-              process.stderr.write(`proxy: notification failed: ${err}\n`)
-            }
-          }
-          eventType = ''
-          data = ''
-        }
+    const data = await res.json() as { messages: unknown[] }
+    for (const msg of data.messages) {
+      try {
+        await mcp.notification({
+          method: 'notifications/claude/channel',
+          params: msg,
+        })
+        plog(`delivered to Claude`)
+      } catch (err) {
+        plog(`notification failed: ${err}`)
       }
     }
+  } catch (err) {
+    plog(`poll error: ${err}`)
+  }
+}
 
-    // Connection closed — reconnect
-    process.stderr.write('proxy: SSE connection closed, reconnecting...\n')
-    setTimeout(connectSSE, 2000)
-  }).catch((err) => {
-    process.stderr.write(`proxy: SSE error: ${err}\n`)
-    setTimeout(connectSSE, 3000)
-  })
+function startPolling(): void {
+  if (polling) return
+  polling = true
+  plog('polling started')
+
+  setInterval(async () => {
+    await pollMessages()
+  }, 1000).unref()  // poll every 1 second
 }
 
 // ── Start ──

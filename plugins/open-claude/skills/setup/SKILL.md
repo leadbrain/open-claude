@@ -115,7 +115,6 @@ In HTTP mode, a persistent server handles Discord. Claude Code connects via a li
       "args": ["${CLAUDE_PLUGIN_ROOT}/proxy.ts"],
       "env": {
         "OPEN_CLAUDE_SERVER": "http://localhost:3100",
-        "OPEN_CLAUDE_CHAT_ID": "<channel_id>",
         "DISCORD_MAIN_CHANNEL": "<channel_id>",
         "DISCORD_BOT_TOKEN": "<token>",
         "OPEN_CLAUDE_WORKSPACE": "<workspace path (pwd)>"

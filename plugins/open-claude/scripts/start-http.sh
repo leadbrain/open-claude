@@ -62,7 +62,11 @@ sleep 2
 
 # Window 2: Claude Code main session (proxy connects to HTTP server via stdio)
 tmux new-window -t "$TMUX_SESSION" -n main \
-  "${ENV_EXPORTS}export OPEN_CLAUDE_SERVER='http://localhost:${OPEN_CLAUDE_PORT:-3100}' && export OPEN_CLAUDE_CHAT_ID='${DISCORD_MAIN_CHANNEL}' && cd '$WORKSPACE' && claude --dangerously-load-development-channels server:open-claude; echo 'Claude exited. Press Enter.'; read"
+  "${ENV_EXPORTS}export OPEN_CLAUDE_SERVER='http://localhost:${OPEN_CLAUDE_PORT:-3100}' && export OPEN_CLAUDE_CHAT_ID='${DISCORD_MAIN_CHANNEL}' && cd '$WORKSPACE' && claude --dangerously-skip-permissions --dangerously-load-development-channels server:open-claude; echo 'Claude exited. Press Enter.'; read"
+
+# Auto-approve the development channels prompt
+sleep 3
+tmux send-keys -t "$TMUX_SESSION":main Enter 2>/dev/null
 
 echo "Started! Attaching to tmux session..."
 echo "  Detach: Ctrl-b d"
