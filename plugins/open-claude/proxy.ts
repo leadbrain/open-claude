@@ -205,17 +205,34 @@ async function pollMessages(): Promise<void> {
       plog(`poll failed: ${res.status}`)
       return
     }
-    const data = await res.json() as { messages: unknown[] }
+    const data = await res.json() as { messages: any[] }
+    if (data.messages.length === 0) return
+
+    let maxSeq = -1
     for (const msg of data.messages) {
+      const seq = msg.seq
+      // Remove seq from the object before sending to Claude
+      const { seq: _, ...params } = msg
       try {
         await mcp.notification({
           method: 'notifications/claude/channel',
-          params: msg,
+          params,
         })
-        plog(`delivered to Claude`)
+        if (seq > maxSeq) maxSeq = seq
+        plog(`delivered to Claude (seq=${seq})`)
       } catch (err) {
-        plog(`notification failed: ${err}`)
+        plog(`notification failed (seq=${seq}): ${err}`)
+        break  // Stop delivering — don't ack undelivered messages
       }
+    }
+
+    // Ack successfully delivered messages
+    if (maxSeq >= 0) {
+      fetch(`${SERVER_URL}/api/messages/ack`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session: SESSION_ID, seq: maxSeq }),
+      }).catch(err => plog(`ack failed: ${err}`))
     }
   } catch (err) {
     plog(`poll error: ${err}`)

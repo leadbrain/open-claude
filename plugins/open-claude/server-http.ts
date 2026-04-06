@@ -83,10 +83,16 @@ function isSelfBot(authorId: string): boolean {
 
 // ── Session Registry ──
 
+interface QueuedMessage {
+  seq: number
+  data: unknown
+}
+
 interface Session {
   sessionId: string
   chatId: string
-  messageQueue: unknown[]
+  messageQueue: QueuedMessage[]
+  nextSeq: number
 }
 
 const sessions = new Map<string, Session>()
@@ -121,7 +127,7 @@ function enqueueToSession(session: Session, msg: PlatformMessage): void {
 }
 
 function enqueueMessage(session: Session, data: unknown): void {
-  session.messageQueue.push(data)
+  session.messageQueue.push({ seq: session.nextSeq++, data })
   if (session.messageQueue.length > 100) session.messageQueue.shift()
 }
 
@@ -176,7 +182,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
       const oldSid = chatToSession.get(chatId)
       if (oldSid && oldSid !== sessionId) sessions.delete(oldSid)
 
-      sessions.set(sessionId, { sessionId, chatId, messageQueue: [] })
+      sessions.set(sessionId, { sessionId, chatId, messageQueue: [], nextSeq: 0 })
       chatToSession.set(chatId, sessionId)
       process.stderr.write(`open-claude: registered session=${sessionId.slice(0, 8)} chat=${chatId}\n`)
       res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -196,9 +202,29 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
       return
     }
     const session = sessions.get(sessionId)!
-    const messages = session.messageQueue.splice(0)
+    // Peek — don't drain. Proxy calls /api/messages/ack after successful delivery.
+    const messages = session.messageQueue.map(m => ({ seq: m.seq, ...m.data as object }))
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ messages }))
+    return
+  }
+
+  // ── Messages ack: proxy confirms delivery, server removes from queue ──
+  if (url.pathname === '/api/messages/ack' && req.method === 'POST') {
+    try {
+      const body = await parseBody(req)
+      const sessionId = body.session as string
+      const ackSeq = body.seq as number  // ack all messages up to this seq
+      const session = sessions.get(sessionId)
+      if (session) {
+        session.messageQueue = session.messageQueue.filter(m => m.seq > ackSeq)
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true }))
+    } catch {
+      res.writeHead(200)
+      res.end()
+    }
     return
   }
 
