@@ -108,10 +108,19 @@ The scheduler sends `[scheduled] /<name>` to the target channel at the scheduled
 - `qmd` — no schedule (on-demand only), just `{ "enabled": true }`
 
 **Custom job example:**
+
+First create the skill in the **project scope** (NOT ~/.claude/):
+```
+.claude/skills/my-report/SKILL.md
+```
+
+Then schedule it:
 ```
 /open-claude:configure jobs enable my-report --channel 123456 --schedule "0 9 * * 1"
 ```
 This runs `/my-report` every Monday at 9:00 in channel 123456.
+
+**Important**: Skills for jobs must be in `.claude/skills/` (project scope), not `~/.claude/skills/` (user scope). Project skills are accessible to all sessions in the workspace.
 
 ### `jobs disable <name>`
 

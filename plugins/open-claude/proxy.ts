@@ -68,6 +68,8 @@ const mcp = new Server(
       'Scheduled jobs are managed via memory/jobs.json. Any skill can run on a cron schedule. Use /open-claude:configure jobs list to see all jobs, /open-claude:configure jobs enable <name> --channel <id> --schedule "cron" to add one. Built-in: conversation-analysis, qmd.',
       '',
       'Messages prefixed with [scheduled] are from the built-in scheduler — run the corresponding skill (e.g., [scheduled] /conversation-analysis → run /conversation-analysis).',
+      '',
+      'When creating skills for jobs, always create them in the PROJECT scope (.claude/skills/ in the workspace root), NOT in ~/.claude/skills/. Project skills are visible to all sessions in this workspace. Example: .claude/skills/my-report/SKILL.md',
     ].join('\n'),
   },
 )
