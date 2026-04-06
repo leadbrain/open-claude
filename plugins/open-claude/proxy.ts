@@ -129,6 +129,19 @@ const TOOLS = [
       required: ['channel'],
     },
   },
+  {
+    name: 'create_thread',
+    description: 'Create a new thread in a Discord channel. Returns the thread ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel_id: { type: 'string', description: 'Channel to create thread in. Defaults to main channel.' },
+        name: { type: 'string', description: 'Thread name.' },
+        message: { type: 'string', description: 'Optional first message in the thread.' },
+      },
+      required: ['name'],
+    },
+  },
 ]
 
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))

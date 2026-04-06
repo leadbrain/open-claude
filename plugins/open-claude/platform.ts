@@ -65,6 +65,8 @@ export interface PlatformAdapter {
   editMessage(channelId: string, messageId: string, content: string): Promise<void>
   react(channelId: string, messageId: string, emoji: string): Promise<void>
   removeReaction?(channelId: string, messageId: string, emoji: string): Promise<void>
+  /** Create a thread in a channel, returns thread ID */
+  createThread?(channelId: string, name: string, message?: string): Promise<string>
   sendTyping(channelId: string): Promise<void>
   fetchMessages(channelId: string, limit: number): Promise<FetchedMessage[]>
   downloadAttachment(att: PlatformAttachment): Promise<{ data: Buffer; name: string }>

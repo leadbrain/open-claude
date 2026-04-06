@@ -152,6 +152,19 @@ export class LarkAdapter implements PlatformAdapter {
     })
   }
 
+  async createThread(channelId: string, name: string, message?: string): Promise<string> {
+    await this.ensureToken()
+    // Lark: create a thread by replying in thread mode
+    const content = message ?? name
+    const res = await this.api('POST', '/im/v1/messages?receive_id_type=chat_id', {
+      receive_id: channelId,
+      msg_type: 'text',
+      content: JSON.stringify({ text: content }),
+      reply_in_thread: true,
+    })
+    return res?.data?.message_id ?? ''
+  }
+
   async sendTyping(channelId: string): Promise<void> {
     // Lark has no typing indicator. Send/update a "thinking..." message instead.
     const existing = this.thinkingMessages.get(channelId)

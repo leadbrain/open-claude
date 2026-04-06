@@ -183,6 +183,17 @@ export class DiscordAdapter implements PlatformAdapter {
     }
   }
 
+  async createThread(channelId: string, name: string, message?: string): Promise<string> {
+    const ch = await this.fetchTextChannel(channelId)
+    if (!('threads' in ch)) throw new Error('channel does not support threads')
+    const thread = await (ch as any).threads.create({
+      name,
+      autoArchiveDuration: 1440,  // 24 hours
+      ...(message ? { message: { content: message } } : {}),
+    })
+    return thread.id
+  }
+
   async sendTyping(channelId: string): Promise<void> {
     const ch = await this.fetchTextChannel(channelId)
     if ('sendTyping' in ch) await (ch as any).sendTyping()

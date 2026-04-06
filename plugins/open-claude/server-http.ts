@@ -277,6 +277,15 @@ async function handleToolCall(tool: string, args: Record<string, unknown>): Prom
       return { text: out }
     }
 
+    case 'create_thread': {
+      if (!adapter.createThread) return { text: 'create_thread not supported on this platform', isError: true }
+      const channelId = args.channel_id as string ?? config.mainChannel
+      const name = args.name as string
+      const message = args.message as string | undefined
+      const threadId = await adapter.createThread(channelId, name, message)
+      return { text: `created thread (id: ${threadId})` }
+    }
+
     case 'search': {
       const qmdPath = '/opt/homebrew/bin/qmd'
       if (!existsSync(qmdPath)) return { text: 'QMD not available', isError: true }
