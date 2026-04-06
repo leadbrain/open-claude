@@ -134,8 +134,8 @@ Once credentials and channel ID are provided:
       "args": ["${CLAUDE_PLUGIN_ROOT}/proxy.ts"],
       "env": {
         "OPEN_CLAUDE_SERVER": "http://localhost:3100",
-        "DISCORD_MAIN_CHANNEL": "<channel_id>",
-        "DISCORD_BOT_TOKEN": "<token (Discord) or empty (Lark)>",
+        "DISCORD_MAIN_CHANNEL": "<main channel/chat ID>",
+        "DISCORD_BOT_TOKEN": "<Discord bot token, if using Discord>",
         "OPEN_CLAUDE_WORKSPACE": "<workspace path (pwd)>"
       }
     }
@@ -149,22 +149,24 @@ Once credentials and channel ID are provided:
 
 2. Create `.claude/discord.env` (needed by the HTTP server process and hooks):
 
-For Discord:
-```
-DISCORD_BOT_TOKEN=<token>
-DISCORD_MAIN_CHANNEL=<channel_id>
-OPEN_CLAUDE_WORKSPACE=<workspace path (pwd)>
-```
+Include credentials for the platforms you're using. Both can be active simultaneously:
 
-For Lark:
 ```
-OPEN_CLAUDE_PLATFORM=lark
+# Discord (include if using Discord)
+DISCORD_BOT_TOKEN=<token>
+
+# Lark (include if using Lark)
 LARK_APP_ID=<app_id>
 LARK_APP_SECRET=<app_secret>
 LARK_VERIFICATION_TOKEN=<verification_token>
-DISCORD_MAIN_CHANNEL=<chat_id>
+OPEN_CLAUDE_PLATFORM=lark
+
+# Common
+DISCORD_MAIN_CHANNEL=<main channel/chat ID>
 OPEN_CLAUDE_WORKSPACE=<workspace path (pwd)>
 ```
+
+Note: `OPEN_CLAUDE_PLATFORM=lark` is only needed for hooks (auto-reply.sh, typing-loop.sh) to use Lark API instead of Discord. The server auto-detects platforms from credentials.
 
 ```bash
 chmod 600 .claude/discord.env

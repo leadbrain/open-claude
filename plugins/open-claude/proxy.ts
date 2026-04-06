@@ -51,9 +51,9 @@ const mcp = new Server(
       experimental: { 'claude/channel': {} },
     },
     instructions: [
-      'The sender reads Discord, not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
+      'The sender reads a messaging platform (Discord or Lark), not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
       '',
-      'Messages from Discord arrive as <channel source="discord" chat_id="..." message_id="..." user="..." ts="...">. If the tag has attachment_count, the attachments attribute lists name/type/size — call download_attachment(chat_id, message_id) to fetch them.',
+      'Messages arrive as <channel source="discord|lark" chat_id="..." message_id="..." user="..." ts="...">. If the tag has attachment_count, the attachments attribute lists name/type/size — call download_attachment(chat_id, message_id) to fetch them.',
       '',
       'For normal responses: just respond with plain text — the Stop hook (auto-reply.sh) automatically sends your full response to Discord. Do NOT call the reply tool for normal responses. Only use the reply tool when you need file attachments (files: ["/abs/path.png"]) or quote-replies (reply_to: message_id).',
       '',

@@ -43,7 +43,7 @@ Claude Code session
 - [Bun](https://bun.sh) (runtime)
 - [tmux](https://github.com/tmux/tmux) (session management)
 - [jq](https://jqlang.github.io/jq/) (JSON processing in hooks)
-- A Discord bot token (or Lark app credentials)
+- A Discord bot token and/or Lark app credentials (both can run simultaneously)
 
 ## Setup
 
@@ -92,12 +92,19 @@ Or add directly: `/open-claude:access allow <your-discord-user-id>`
 
 ## Configuration
 
-Bot token and channel settings are in `.claude/discord.env`:
+Platform credentials in `.claude/discord.env`. Include what you need — both can run simultaneously:
 
 ```bash
+# Discord
 DISCORD_BOT_TOKEN=MTIz...          # Bot token
 DISCORD_MAIN_CHANNEL=123456789     # Main channel ID
 OPEN_CLAUDE_WORKSPACE=/path/to/ws  # Workspace path
+
+# Lark (optional — add to enable)
+LARK_APP_ID=cli_xxx                # App ID
+LARK_APP_SECRET=xxx                # App Secret
+LARK_VERIFICATION_TOKEN=xxx        # Webhook verification
+OPEN_CLAUDE_PLATFORM=lark          # For hooks to use Lark API
 ```
 
 Optional settings (add to `.claude/discord.env`):
@@ -162,7 +169,7 @@ open-claude/
 ├── platform.ts            # Platform adapter interface
 ├── adapters/
 │   ├── discord.ts         # Discord adapter
-│   └── lark.ts            # Lark adapter (experimental)
+│   └── lark.ts            # Lark adapter
 ├── hooks/
 │   ├── hooks.json         # Hook registrations
 │   ├── auto-reply.sh      # Stop hook — send response to Discord
