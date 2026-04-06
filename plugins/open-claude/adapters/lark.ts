@@ -1,22 +1,18 @@
 /**
- * Lark (Feishu) adapter — implements PlatformAdapter using Lark SDK.
+ * Lark (Feishu) adapter — based on OpenClaw's production feishu extension.
  *
- * Uses WebSocket long-connection mode (WSClient) for receiving messages.
+ * Uses @larksuiteoapi/node-sdk WSClient for WebSocket long-connection.
  * No public URL required — works behind NAT like Discord.
  *
- * Required env vars:
- *   LARK_APP_ID, LARK_APP_SECRET — from Lark Developer Console
+ * Core logic (client creation, domain resolution, event parsing) extracted
+ * from OpenClaw's feishu extension (extensions/feishu/src/).
  *
+ * Required env:
+ *   LARK_APP_ID, LARK_APP_SECRET
  * Optional:
- *   LARK_DOMAIN — "lark" for international, "feishu" for China (default: lark)
- *
- * Lark Developer Console setup:
- *   1. Create app → get App ID + App Secret
- *   2. Enable bot capability
- *   3. Add permissions: im:message, im:message:send_as_bot, im:resource, im:chat
- *   4. Event subscriptions → select "Use long connection" (WebSocket mode)
- *   5. Add event: im.message.receive_v1
- *   6. Publish app
+ *   LARK_DOMAIN — "feishu" (default, China) or "lark" (international)
+ *   LARK_ENCRYPT_KEY — for event decryption
+ *   LARK_VERIFICATION_TOKEN — for event verification
  */
 
 import { readFileSync, statSync } from 'fs'
@@ -29,37 +25,101 @@ import type {
 } from '../platform.ts'
 
 // Dynamic import — @larksuiteoapi/node-sdk is optional dependency
-let LarkSDK: any = null
+let Lark: any = null
 
 async function loadSDK() {
-  if (LarkSDK) return LarkSDK
+  if (Lark) return Lark
   try {
-    LarkSDK = await import('@larksuiteoapi/node-sdk')
-    return LarkSDK
+    Lark = await import('@larksuiteoapi/node-sdk')
+    return Lark
   } catch {
     throw new Error('Lark SDK not installed. Run: bun add @larksuiteoapi/node-sdk')
   }
 }
 
-const LARK_API = 'https://open.larksuite.com/open-apis'
-const FEISHU_API = 'https://open.feishu.cn/open-apis'
-const MAX_ATTACHMENT_BYTES = 30 * 1024 * 1024
+// ── Domain resolution (from OpenClaw client.ts) ──
+
+type FeishuDomain = 'feishu' | 'lark' | (string & {})
+
+function resolveDomain(sdk: any, domain: FeishuDomain | undefined): any {
+  if (domain === 'lark') return sdk.Domain.Lark
+  if (domain === 'feishu' || !domain) return sdk.Domain.Feishu
+  return domain.replace(/\/+$/, '')  // Custom URL for private deployment
+}
+
+// ── Event types (from OpenClaw bot.ts) ──
+
+type FeishuMessageEvent = {
+  sender: {
+    sender_id: {
+      open_id?: string
+      user_id?: string
+      union_id?: string
+    }
+    sender_type?: string
+    tenant_key?: string
+  }
+  message: {
+    message_id: string
+    root_id?: string
+    parent_id?: string
+    chat_id: string
+    chat_type: 'p2p' | 'group'
+    message_type: string
+    content: string
+    mentions?: Array<{
+      key: string
+      id: { open_id?: string; user_id?: string; union_id?: string }
+      name: string
+      tenant_key?: string
+    }>
+  }
+}
+
+// ── Message content parsing (from OpenClaw bot.ts) ──
+
+function parseMessageContent(content: string, messageType: string): string {
+  try {
+    const parsed = JSON.parse(content)
+    if (messageType === 'text') return parsed.text || ''
+    if (messageType === 'post') {
+      // Extract text from rich text post — flatten all content blocks
+      const lang = parsed.zh_cn ?? parsed.en_us ?? parsed[Object.keys(parsed)[0]]
+      if (!lang?.content) return ''
+      return lang.content
+        .flat()
+        .filter((el: any) => el.tag === 'text')
+        .map((el: any) => el.text)
+        .join('')
+    }
+    return content
+  } catch {
+    return content
+  }
+}
+
+function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
+  const mentions = event.message.mentions ?? []
+  if (mentions.length === 0) return false
+  if (!botOpenId) return mentions.length > 0
+  return mentions.some(m => m.id.open_id === botOpenId)
+}
+
+// ── Adapter ──
 
 export class LarkAdapter implements PlatformAdapter {
   readonly name = 'lark'
-  private client: any = null      // Lark Client (for API calls)
-  private wsClient: any = null    // WSClient (for receiving events)
+  private client: any = null
+  private wsClient: any = null
   private botOpenId = ''
   private botName = ''
-  private domain: string
+  private domain: FeishuDomain
   private messageCallback: ((msg: PlatformMessage) => void) | null = null
   private readyCallback: ((botId: string, botName: string) => void) | null = null
   private thinkingMessages = new Map<string, string>()
-  private apiBase: string
 
   constructor() {
-    this.domain = process.env.LARK_DOMAIN ?? 'feishu'  // Default feishu (matches OpenClaw)
-    this.apiBase = this.domain === 'lark' ? LARK_API : FEISHU_API
+    this.domain = (process.env.LARK_DOMAIN as FeishuDomain) ?? 'feishu'
   }
 
   async login(token: string): Promise<void> {
@@ -71,8 +131,9 @@ export class LarkAdapter implements PlatformAdapter {
       throw new Error('LARK_APP_ID and LARK_APP_SECRET are required')
     }
 
-    // Create API client
-    const resolvedDomain = this.domain === 'lark' ? sdk.Domain.Lark : sdk.Domain.Feishu
+    const resolvedDomain = resolveDomain(sdk, this.domain)
+
+    // API client (from OpenClaw client.ts — createFeishuClient)
     this.client = new sdk.Client({
       appId,
       appSecret,
@@ -80,34 +141,39 @@ export class LarkAdapter implements PlatformAdapter {
       domain: resolvedDomain,
     })
 
-    // Create event dispatcher
-    const eventDispatcher = new sdk.EventDispatcher({})
+    // Event dispatcher (from OpenClaw client.ts — createEventDispatcher)
+    const eventDispatcher = new sdk.EventDispatcher({
+      encryptKey: process.env.LARK_ENCRYPT_KEY,
+      verificationToken: process.env.LARK_VERIFICATION_TOKEN,
+    })
 
     // Register message handler
     eventDispatcher.register({
-      'im.message.receive_v1': (event: any) => {
-        process.stderr.write(`lark-adapter: received event im.message.receive_v1\n`)
+      'im.message.receive_v1': (data: unknown) => {
+        const event = data as FeishuMessageEvent
+        process.stderr.write(`lark-adapter: message from ${event?.sender?.sender_id?.open_id} in ${event?.message?.chat_id}\n`)
         this.handleEvent(event)
       },
     })
 
-    // Create WebSocket client and start with event dispatcher
+    // WebSocket client (from OpenClaw client.ts — createFeishuWSClient)
     this.wsClient = new sdk.WSClient({
       appId,
       appSecret,
       domain: resolvedDomain,
       loggerLevel: sdk.LoggerLevel.info,
     })
+
+    // Start with event dispatcher (from OpenClaw monitor.ts)
     this.wsClient.start({ eventDispatcher })
 
     // Fetch bot info
-    await this.fetchBotInfo()
+    await this.fetchBotInfo(sdk, resolvedDomain, appId, appSecret)
 
     process.stderr.write(`lark-adapter: connected via WebSocket (${this.domain})\n`)
   }
 
   async destroy(): Promise<void> {
-    // WSClient handles cleanup on GC
     this.wsClient = null
     this.client = null
   }
@@ -122,40 +188,18 @@ export class LarkAdapter implements PlatformAdapter {
   }
 
   async sendMessage(channelId: string, opts: SendOptions): Promise<string> {
-    let content: string
-    let msgType: string
-
-    if (opts.files && opts.files.length > 0) {
-      // Upload first file as image
-      const imageKey = await this.uploadFile(opts.files[0])
-      msgType = 'post'
-      content = JSON.stringify({
-        zh_cn: {
-          title: '',
-          content: [
-            [{ tag: 'text', text: opts.content }],
-            [{ tag: 'img', image_key: imageKey }],
-          ],
-        },
-      })
-    } else {
-      msgType = 'text'
-      content = JSON.stringify({ text: opts.content })
-    }
-
     const res = await this.client.im.message.create({
       params: { receive_id_type: 'chat_id' },
       data: {
         receive_id: channelId,
-        msg_type: msgType,
-        content,
+        msg_type: 'text',
+        content: JSON.stringify({ text: opts.content }),
       },
     })
-
     return res?.data?.message_id ?? ''
   }
 
-  async editMessage(channelId: string, messageId: string, content: string): Promise<void> {
+  async editMessage(_channelId: string, messageId: string, content: string): Promise<void> {
     await this.client.im.message.patch({
       path: { message_id: messageId },
       data: {
@@ -165,22 +209,22 @@ export class LarkAdapter implements PlatformAdapter {
     })
   }
 
-  async react(channelId: string, messageId: string, emoji: string): Promise<void> {
-    await this.client.im.messageReaction.create({
-      path: { message_id: messageId },
-      data: { reaction_type: { emoji_type: emoji } },
-    })
+  async react(_channelId: string, messageId: string, emoji: string): Promise<void> {
+    try {
+      await this.client.im.messageReaction.create({
+        path: { message_id: messageId },
+        data: { reaction_type: { emoji_type: emoji } },
+      })
+    } catch {}
   }
 
-  async removeReaction(channelId: string, messageId: string, emoji: string): Promise<void> {
-    // Lark: list reactions then delete the bot's
+  async removeReaction(_channelId: string, messageId: string, emoji: string): Promise<void> {
     try {
       const res = await this.client.im.messageReaction.list({
         path: { message_id: messageId },
         params: { reaction_type: emoji },
       })
-      const items = res?.data?.items ?? []
-      for (const item of items) {
+      for (const item of res?.data?.items ?? []) {
         if (item.operator?.operator_id === this.botOpenId) {
           await this.client.im.messageReaction.delete({
             path: { message_id: messageId, reaction_id: item.reaction_id },
@@ -200,27 +244,15 @@ export class LarkAdapter implements PlatformAdapter {
         content: JSON.stringify({ text: content }),
       },
     })
-    // Lark threads = message replies. Return message_id as "thread id"
     return res?.data?.message_id ?? ''
   }
 
   async sendTyping(channelId: string): Promise<void> {
-    // Lark has no typing indicator — send/update "thinking..." message
     const existing = this.thinkingMessages.get(channelId)
     if (existing) return
-
     try {
       const msgId = await this.sendMessage(channelId, { content: '🤔 ...' })
       this.thinkingMessages.set(channelId, msgId)
-    } catch {}
-  }
-
-  async clearTyping(channelId: string): Promise<void> {
-    const msgId = this.thinkingMessages.get(channelId)
-    if (!msgId) return
-    this.thinkingMessages.delete(channelId)
-    try {
-      await this.client.im.message.delete({ path: { message_id: msgId } })
     } catch {}
   }
 
@@ -232,13 +264,12 @@ export class LarkAdapter implements PlatformAdapter {
         page_size: Math.min(limit, 50),
       },
     })
-    const items = res?.data?.items ?? []
-    return items.map((m: any) => ({
+    return (res?.data?.items ?? []).map((m: any) => ({
       id: m.message_id,
       authorId: m.sender?.id ?? '',
       authorName: m.sender?.sender_type === 'user' ? 'user' : 'bot',
       isBot: m.sender?.sender_type === 'app',
-      content: this.extractTextContent(m),
+      content: parseMessageContent(m.content ?? '{}', m.msg_type ?? 'text'),
       createdAt: new Date(parseInt(m.create_time ?? '0') * 1000),
       attachmentCount: 0,
     }))
@@ -257,8 +288,8 @@ export class LarkAdapter implements PlatformAdapter {
     return this.botOpenId || undefined
   }
 
-  async isReplyToBot(msg: PlatformMessage): Promise<boolean> {
-    return false // Lark doesn't easily expose this
+  async isReplyToBot(_msg: PlatformMessage): Promise<boolean> {
+    return false
   }
 
   matchesPatterns(text: string, patterns: string[]): boolean {
@@ -270,63 +301,57 @@ export class LarkAdapter implements PlatformAdapter {
 
   // ── Internal ──
 
-  private async fetchBotInfo(): Promise<void> {
+  private async fetchBotInfo(sdk: any, domain: any, appId: string, appSecret: string): Promise<void> {
     try {
-      const res = await fetch(`${this.apiBase}/bot/v3/info`, {
-        headers: { Authorization: `Bearer ${await this.getTenantToken()}` },
-      })
-      const data = await res.json() as any
-      this.botOpenId = data?.bot?.open_id ?? ''
-      this.botName = data?.bot?.bot_name ?? 'bot'
+      // Use tenant token to get bot info
+      const tokenRes = await fetch(
+        `${domain === sdk.Domain.Lark ? 'https://open.larksuite.com' : 'https://open.feishu.cn'}/open-apis/auth/v3/tenant_access_token/internal`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+        },
+      )
+      const tokenData = await tokenRes.json() as any
+      const tenantToken = tokenData.tenant_access_token
+
+      if (tenantToken) {
+        const botRes = await fetch(
+          `${domain === sdk.Domain.Lark ? 'https://open.larksuite.com' : 'https://open.feishu.cn'}/open-apis/bot/v3/info`,
+          { headers: { Authorization: `Bearer ${tenantToken}` } },
+        )
+        const botData = await botRes.json() as any
+        this.botOpenId = botData?.bot?.open_id ?? ''
+        this.botName = botData?.bot?.bot_name ?? 'bot'
+      }
     } catch {
       this.botName = 'bot'
     }
     if (this.readyCallback) this.readyCallback(this.botOpenId, this.botName)
   }
 
-  private async getTenantToken(): Promise<string> {
-    const res = await fetch(`${this.apiBase}/auth/v3/tenant_access_token/internal`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        app_id: process.env.LARK_APP_ID,
-        app_secret: process.env.LARK_APP_SECRET,
-      }),
-    })
-    const data = await res.json() as any
-    return data.tenant_access_token ?? ''
-  }
-
-  private handleEvent(event: any): void {
-    process.stderr.write(`lark-adapter: handleEvent keys=${JSON.stringify(Object.keys(event ?? {}))}\n`)
-    const msg = event?.message
+  private handleEvent(event: FeishuMessageEvent): void {
     const sender = event?.sender
-    if (!msg || !sender) {
-      process.stderr.write(`lark-adapter: no message or sender in event\n`)
-      return
-    }
-    process.stderr.write(`lark-adapter: msg from ${sender.sender_type} chat=${msg.chat_id} type=${msg.msg_type}\n`)
-    if (sender.sender_type === 'app') return // Skip bot messages
+    const msg = event?.message
+    if (!msg || !sender) return
+    if (sender.sender_type === 'app') return
 
-    const content = this.extractTextContent(msg)
-    const mentions = msg.mentions ?? []
-    const mentionsBot = mentions.some((m: any) => m.id?.open_id === this.botOpenId)
-
-    const chatType = msg.chat_type
-    const isDM = chatType === 'p2p'
+    const content = parseMessageContent(msg.content, msg.message_type)
+    const mentionsBot = checkBotMentioned(event, this.botOpenId)
+    const isDM = msg.chat_type === 'p2p'
     const isThread = !!msg.root_id && msg.root_id !== msg.message_id
 
     const platformMsg: PlatformMessage = {
       id: msg.message_id,
       channelId: msg.chat_id,
-      authorId: sender.sender_id?.open_id ?? sender.sender_id?.user_id ?? '',
-      authorName: sender.sender_id?.open_id ?? 'unknown',
+      authorId: sender.sender_id.open_id ?? sender.sender_id.user_id ?? '',
+      authorName: sender.sender_id.open_id ?? 'unknown',
       content,
       isBot: false,
       isDM,
       isThread,
       parentChannelId: isThread ? msg.chat_id : undefined,
-      createdAt: new Date(parseInt(msg.create_time ?? '0') * 1000),
+      createdAt: new Date(),
       attachments: this.extractAttachments(msg),
       mentionsBot,
       reference: msg.parent_id ? { messageId: msg.parent_id } : undefined,
@@ -335,58 +360,19 @@ export class LarkAdapter implements PlatformAdapter {
     this.messageCallback?.(platformMsg)
   }
 
-  private extractTextContent(msg: any): string {
-    try {
-      const content = JSON.parse(msg.content ?? '{}')
-      if (msg.msg_type === 'text') return content.text ?? ''
-      if (msg.msg_type === 'post') {
-        const langs = content.zh_cn ?? content.en_us ?? content[Object.keys(content)[0]]
-        if (!langs?.content) return ''
-        return langs.content
-          .flat()
-          .filter((el: any) => el.tag === 'text')
-          .map((el: any) => el.text)
-          .join('')
-      }
-      return content.text ?? ''
-    } catch {
-      return ''
-    }
-  }
-
-  private extractAttachments(msg: any): PlatformAttachment[] {
-    if (msg.msg_type !== 'file' && msg.msg_type !== 'image') return []
+  private extractAttachments(msg: FeishuMessageEvent['message']): PlatformAttachment[] {
+    if (msg.message_type !== 'file' && msg.message_type !== 'image') return []
     try {
       const content = JSON.parse(msg.content ?? '{}')
       return [{
         id: msg.message_id,
         name: content.file_name ?? content.image_key ?? 'file',
-        contentType: msg.msg_type === 'image' ? 'image/png' : undefined,
+        contentType: msg.message_type === 'image' ? 'image/png' : undefined,
         size: 0,
         url: content.file_key ?? content.image_key ?? '',
       }]
     } catch {
       return []
     }
-  }
-
-  private async uploadFile(filePath: string): Promise<string> {
-    const stat = statSync(filePath)
-    if (stat.size > MAX_ATTACHMENT_BYTES) {
-      throw new Error(`file too large: ${filePath}`)
-    }
-    const data = readFileSync(filePath)
-    const formData = new FormData()
-    formData.append('image_type', 'message')
-    formData.append('image', new Blob([data]), filePath.split('/').pop() ?? 'file')
-
-    const token = await this.getTenantToken()
-    const res = await fetch(`${this.apiBase}/im/v1/images`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: formData,
-    })
-    const json = await res.json() as any
-    return json?.data?.image_key ?? ''
   }
 }
