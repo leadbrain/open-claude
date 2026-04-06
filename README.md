@@ -100,10 +100,9 @@ DISCORD_BOT_TOKEN=MTIz...          # Bot token
 DISCORD_MAIN_CHANNEL=123456789     # Main channel ID
 OPEN_CLAUDE_WORKSPACE=/path/to/ws  # Workspace path
 
-# Lark (optional — add to enable)
+# Lark (optional — add to enable, uses WebSocket, no public URL needed)
 LARK_APP_ID=cli_xxx                # App ID
 LARK_APP_SECRET=xxx                # App Secret
-LARK_VERIFICATION_TOKEN=xxx        # Webhook verification
 OPEN_CLAUDE_PLATFORM=lark          # For hooks to use Lark API
 ```
 

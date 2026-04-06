@@ -51,7 +51,7 @@ const mcp = new Server(
       experimental: { 'claude/channel': {} },
     },
     instructions: [
-      'This plugin connects to messaging platforms (Discord and/or Lark). Both can run simultaneously — the server auto-detects from credentials in .claude/discord.env. To add Lark alongside Discord, add LARK_APP_ID, LARK_APP_SECRET, and LARK_VERIFICATION_TOKEN to .claude/discord.env and restart the server.',
+      'This plugin connects to messaging platforms (Discord and/or Lark). Both can run simultaneously — the server auto-detects from credentials in .claude/discord.env. To add Lark alongside Discord, add LARK_APP_ID and LARK_APP_SECRET to .claude/discord.env and restart the server.',
       '',
       'The sender reads a messaging platform, not this session. Anything you want them to see must go through the reply tool — your transcript output never reaches their chat.',
       '',

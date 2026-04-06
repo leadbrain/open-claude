@@ -103,10 +103,11 @@ Then wait for the user's response. The token typically starts with letters and c
 >
 > 1. Go to [Lark Developer Console](https://open.larksuite.com/app)
 > 2. Create New App → get **App ID** and **App Secret**
-> 3. Under **Event Subscriptions**, set the webhook URL to `http://your-server:9876` (or configure LARK_EVENT_PORT)
-> 4. Subscribe to events: `im.message.receive_v1`
-> 5. Under **Permissions**, add: `im:message`, `im:message:send_as_bot`, `im:resource`
-> 6. Under **Bot**, enable the bot capability
+> 3. Under **Bot**, enable the bot capability
+> 4. Under **Permissions**, add: `im:message`, `im:message:send_as_bot`, `im:resource`, `im:chat`
+> 5. Under **Event Subscriptions**, select **Use long connection** (WebSocket mode)
+> 6. Add event: `im.message.receive_v1`
+> 7. Publish the app
 >
 > **Paste your App ID and App Secret when ready.**
 
@@ -158,7 +159,6 @@ DISCORD_BOT_TOKEN=<token>
 # Lark (include if using Lark)
 LARK_APP_ID=<app_id>
 LARK_APP_SECRET=<app_secret>
-LARK_VERIFICATION_TOKEN=<verification_token>
 OPEN_CLAUDE_PLATFORM=lark
 
 # Common

@@ -22,7 +22,7 @@ This file provides persistent context for Claude across sessions. Edit freely â€
 open-claude supports Discord and Lark simultaneously. The server auto-detects platforms from credentials in `.claude/discord.env`. To add a platform, add its credentials and restart the server.
 
 - **Discord**: `DISCORD_BOT_TOKEN` in `.claude/discord.env`
-- **Lark**: `LARK_APP_ID` + `LARK_APP_SECRET` + `LARK_VERIFICATION_TOKEN` in `.claude/discord.env`
+- **Lark**: `LARK_APP_ID` + `LARK_APP_SECRET` in `.claude/discord.env` (uses WebSocket, no public URL needed)
 
 ## Scheduled Jobs
 
