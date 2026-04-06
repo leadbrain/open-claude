@@ -153,6 +153,8 @@ describe('auto-reply.sh', () => {
     proc.stdin.write(input)
     proc.stdin.end()
     await proc.exited
+    // Send runs in background subshell — wait for it
+    await new Promise(r => setTimeout(r, 500))
 
     // Verify curl was called with the right channel
     expect(existsSync(curlLog)).toBe(true)
@@ -186,6 +188,7 @@ describe('auto-reply.sh', () => {
     proc.stdin.write(input)
     proc.stdin.end()
     await proc.exited
+    await new Promise(r => setTimeout(r, 500))
 
     expect(existsSync(curlLog)).toBe(true)
     const log = readFileSync(curlLog, 'utf8')

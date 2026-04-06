@@ -172,59 +172,61 @@ if [ "$EVENT_LOG" = "true" ]; then
   record_event &
 fi
 
-# ── Send message (platform-aware) ──
+# ── Send message in background (don't block Stop hook) ──
+# Claude Code waits for Stop hook to finish before accepting new messages.
+# Running send in background minimizes the gap.
 
 PLUGIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-source "$PLUGIN_DIR/hooks/platform-send.sh"
-
-_send() {
-  send_message "$CHAT_ID" "$1"
-}
-
-MSG_LEN=${#RESPONSE}
-if [ "$MSG_LEN" -le 2000 ]; then
-  _send "$RESPONSE"
-else
-  REMAINING="$RESPONSE"
-  while [ -n "$REMAINING" ]; do
-    if [ ${#REMAINING} -le 2000 ]; then
-      _send "$REMAINING"
-      break
-    fi
-    # Find last newline within 2000 chars
-    CHUNK="${REMAINING:0:2000}"
-    LAST_NL=$(printf '%s' "$CHUNK" | grep -bo $'\n' | tail -1 | cut -d: -f1)
-    if [ -n "$LAST_NL" ] && [ "$LAST_NL" -gt 100 ]; then
-      CHUNK="${REMAINING:0:$LAST_NL}"
-      REMAINING="${REMAINING:$((LAST_NL+1))}"
-    else
-      REMAINING="${REMAINING:2000}"
-    fi
-    # Count ``` fences — odd means code block is open
-    BACKTICK_COUNT=$(printf '%s' "$CHUNK" | grep -o '```' | wc -l | tr -d ' ')
-    if [ $((BACKTICK_COUNT % 2)) -eq 1 ]; then
-      CHUNK="${CHUNK}"$'\n'"\`\`\`"
-      REMAINING="\`\`\`"$'\n'"${REMAINING}"
-    fi
-    _send "$CHUNK"
-    sleep 0.3
-  done
-fi
-
-# Remove ack reaction — notify server to clear 👀
 OPEN_CLAUDE_SERVER="${OPEN_CLAUDE_SERVER:-http://localhost:3100}"
-curl -s -X POST "${OPEN_CLAUDE_SERVER}/api/ack-clear" \
-  -H "Content-Type: application/json" \
-  --data-raw "$(jq -n --arg ch "$CHAT_ID" '{chat_id: $ch}')" > /dev/null 2>&1 &
 
-# Cron: copy to log thread
-CRON_MARKER="/tmp/cron-marker-${SESSION_ID}"
-if [ -f "$CRON_MARKER" ] && [ -n "$LOG_THREAD" ] && [ "$CHAT_ID" != "$LOG_THREAD" ]; then
-  SAVE_CHAT_ID="$CHAT_ID"
-  CHAT_ID="$LOG_THREAD"
-  _send "[cron → ${SAVE_CHAT_ID}] ${RESPONSE:0:1900}"
-  CHAT_ID="$SAVE_CHAT_ID"
-  rm -f "$CRON_MARKER"
-fi
+(
+  source "$PLUGIN_DIR/hooks/platform-send.sh"
+
+  _send() {
+    send_message "$CHAT_ID" "$1"
+  }
+
+  MSG_LEN=${#RESPONSE}
+  if [ "$MSG_LEN" -le 2000 ]; then
+    _send "$RESPONSE"
+  else
+    REMAINING="$RESPONSE"
+    while [ -n "$REMAINING" ]; do
+      if [ ${#REMAINING} -le 2000 ]; then
+        _send "$REMAINING"
+        break
+      fi
+      CHUNK="${REMAINING:0:2000}"
+      LAST_NL=$(printf '%s' "$CHUNK" | grep -bo $'\n' | tail -1 | cut -d: -f1)
+      if [ -n "$LAST_NL" ] && [ "$LAST_NL" -gt 100 ]; then
+        CHUNK="${REMAINING:0:$LAST_NL}"
+        REMAINING="${REMAINING:$((LAST_NL+1))}"
+      else
+        REMAINING="${REMAINING:2000}"
+      fi
+      BACKTICK_COUNT=$(printf '%s' "$CHUNK" | grep -o '```' | wc -l | tr -d ' ')
+      if [ $((BACKTICK_COUNT % 2)) -eq 1 ]; then
+        CHUNK="${CHUNK}"$'\n'"\`\`\`"
+        REMAINING="\`\`\`"$'\n'"${REMAINING}"
+      fi
+      _send "$CHUNK"
+      sleep 0.3
+    done
+  fi
+
+  # Remove ack reaction
+  curl -s -X POST "${OPEN_CLAUDE_SERVER}/api/ack-clear" \
+    -H "Content-Type: application/json" \
+    --data-raw "$(jq -n --arg ch "$CHAT_ID" '{chat_id: $ch}')" > /dev/null 2>&1
+
+  # Cron: copy to log thread
+  CRON_MARKER="/tmp/cron-marker-${SESSION_ID}"
+  if [ -f "$CRON_MARKER" ] && [ -n "$LOG_THREAD" ] && [ "$CHAT_ID" != "$LOG_THREAD" ]; then
+    SAVE_CHAT_ID="$CHAT_ID"
+    CHAT_ID="$LOG_THREAD"
+    _send "[cron → ${SAVE_CHAT_ID}] ${RESPONSE:0:1900}"
+    rm -f "$CRON_MARKER"
+  fi
+) &
 
 exit 0
