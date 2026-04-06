@@ -19,10 +19,10 @@ Arguments passed: `$ARGUMENTS`
 
 ## Step 1: Check feature status
 
-Read `memory/features.json`. If `conversation-analysis` is not enabled or the file doesn't exist:
+Read `memory/jobs.json`. If `conversation-analysis` is not enabled or the file doesn't exist:
 
 > Conversation analysis is not enabled. Enable with:
-> `/open-claude:configure features enable conversation-analysis --channel <thread-id>`
+> `/open-claude:configure jobs enable conversation-analysis --channel <thread-id>`
 
 Stop here.
 

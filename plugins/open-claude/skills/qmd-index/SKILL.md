@@ -29,14 +29,14 @@ ls /opt/homebrew/bin/qmd 2>/dev/null || echo "NOT_FOUND"
 ```
 
 If not found:
-> QMD is not installed. Install it to use search features.
+> QMD is not installed. Install it to use search.
 > See: https://github.com/user/qmd (or appropriate install instructions)
 
 Stop here.
 
-Check `memory/features.json` — if `qmd` is not enabled:
+Check `memory/jobs.json` — if `qmd` is not enabled:
 > QMD indexing is disabled. Enable with:
-> `/open-claude:configure features enable qmd`
+> `/open-claude:configure jobs enable qmd`
 
 Stop here.
 

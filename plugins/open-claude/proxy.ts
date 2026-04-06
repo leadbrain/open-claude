@@ -65,7 +65,7 @@ const mcp = new Server(
       '',
       'The user reads your responses on Discord, not in a terminal. When you edit files, include a brief summary of changes in your text response so the user can see what changed.',
       '',
-      'Optional features are managed via memory/features.json. Use /open-claude:configure features list to see available features, or /open-claude:configure features enable <name> to activate them. Available features: conversation-analysis (daily summary), qmd (search indexing).',
+      'Scheduled jobs are managed via memory/jobs.json. Any skill can run on a cron schedule. Use /open-claude:configure jobs list to see all jobs, /open-claude:configure jobs enable <name> --channel <id> --schedule "cron" to add one. Built-in: conversation-analysis, qmd.',
       '',
       'Messages prefixed with [scheduled] are from the built-in scheduler — run the corresponding skill (e.g., [scheduled] /conversation-analysis → run /conversation-analysis).',
     ].join('\n'),

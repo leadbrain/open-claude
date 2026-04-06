@@ -8,7 +8,7 @@ import {
   type Access,
   type GateInput,
 } from '../lib.ts'
-import { matchesCron, loadFeatures } from '../core.ts'
+import { matchesCron, loadJobs } from '../core.ts'
 import { join } from 'path'
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs'
 
@@ -334,25 +334,25 @@ describe('matchesCron', () => {
   })
 })
 
-// ─��� loadFeatures() ──
+// ─��� loadJobs() ──
 
-describe('loadFeatures', () => {
-  const tmpDir = join(import.meta.dir, '.tmp-features-test')
+describe('loadJobs', () => {
+  const tmpDir = join(import.meta.dir, '.tmp-jobs-test')
 
   test('returns empty object when file missing', () => {
-    expect(loadFeatures('/nonexistent/path')).toEqual({})
+    expect(loadJobs('/nonexistent/path')).toEqual({})
   })
 
-  test('loads valid features.json', () => {
+  test('loads valid jobs.json', () => {
     mkdirSync(join(tmpDir, 'memory'), { recursive: true })
-    writeFileSync(join(tmpDir, 'memory', 'features.json'), JSON.stringify({
+    writeFileSync(join(tmpDir, 'memory', 'jobs.json'), JSON.stringify({
       'conversation-analysis': { enabled: true, schedule: '30 21 * * *', targetChannel: '123' },
       'qmd': { enabled: false },
     }))
-    const features = loadFeatures(tmpDir)
-    expect(features['conversation-analysis'].enabled).toBe(true)
-    expect(features['conversation-analysis'].schedule).toBe('30 21 * * *')
-    expect(features['qmd'].enabled).toBe(false)
+    const jobs = loadJobs(tmpDir)
+    expect(jobs['conversation-analysis'].enabled).toBe(true)
+    expect(jobs['conversation-analysis'].schedule).toBe('30 21 * * *')
+    expect(jobs['qmd'].enabled).toBe(false)
     rmSync(tmpDir, { recursive: true })
   })
 })

@@ -18,7 +18,7 @@ import { randomUUID } from 'crypto'
 import {
   configFromEnv,
   AccessManager,
-  loadFeatures,
+  loadJobs,
   matchesCron,
   type OpenClaudeConfig,
 } from './core.ts'
@@ -459,12 +459,12 @@ function spawnThreadSession(msg: PlatformMessage): void {
 // ── Scheduler ──
 
 setInterval(() => {
-  const features = loadFeatures(config.workspace)
+  const jobs = loadJobs(config.workspace)
   const now = new Date()
-  for (const [name, feat] of Object.entries(features)) {
-    if (!feat.enabled || !feat.schedule || !feat.targetChannel) continue
-    if (!matchesCron(feat.schedule, now)) continue
-    adapter.sendMessage(feat.targetChannel, {
+  for (const [name, job] of Object.entries(features)) {
+    if (!job.enabled || !job.schedule || !job.targetChannel) continue
+    if (!matchesCron(job.schedule, now)) continue
+    adapter.sendMessage(job.targetChannel, {
       content: `[scheduled] /${name}`,
     }).catch(err => {
       process.stderr.write(`open-claude: scheduler ${name} failed: ${err}\n`)

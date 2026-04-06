@@ -236,7 +236,7 @@ Tell the user:
 
 ## Step 7: Optional settings
 
-Ask if the user wants to configure any optional features:
+Ask if the user wants to configure any optional settings:
 
 > **Optional settings:**
 > - `DISCORD_TMUX_SESSION=<name>` — control Claude from Discord (`/clear`, `/restart`)
@@ -245,7 +245,7 @@ Ask if the user wants to configure any optional features:
 >
 > Want to set up any of these? Or you're all set!
 
-## Step 8: CLAUDE.md & optional features
+## Step 8: CLAUDE.md & optional jobs
 
 Ask the user:
 
@@ -268,7 +268,7 @@ If yes:
 
 3. Fill in the placeholders in the template with the provided values.
 
-4. Create `memory/features.json` with all features disabled:
+4. Create `memory/jobs.json` with all jobs disabled:
    ```json
    {
      "conversation-analysis": { "enabled": false },
@@ -288,11 +288,11 @@ If yes:
    ```
 
 6. Mention available features:
-   > **Optional features you can enable later:**
+   > **Optional jobs you can enable later:**
    > - `conversation-analysis` — daily conversation summary + auto-update CLAUDE.md context
    > - `qmd` — index and search your conversation history
    >
-   > Enable with: `/open-claude:configure features enable <name>`
+   > Enable with: `/open-claude:configure jobs enable <name>`
 
 If no, skip to the end.
 

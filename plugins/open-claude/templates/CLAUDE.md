@@ -19,22 +19,22 @@ This file provides persistent context for Claude across sessions. Edit freely �
 
 ## Workflows
 
-### Features & Scheduling
-Feature state is stored in `memory/features.json`. Manage with:
-- `/open-claude:configure features list` — show status
-- `/open-claude:configure features enable <name> --channel <id>` — activate
-- `/open-claude:configure features disable <name>` — deactivate
+### Jobs Jobs Features & Scheduling Scheduling Scheduling
+Feature state is stored in `memory/jobs.json`. Manage with:
+- `/open-claude:configure jobs list` — show status
+- `/open-claude:configure jobs enable <name> --channel <id>` — activate
+- `/open-claude:configure jobs disable <name>` — deactivate
 
-Available features:
+Available jobs:
 - **conversation-analysis** — daily conversation summary, updates `memory/user-context.json` and the Recent Context section below
 - **qmd** — index conversation transcripts for search (requires `/opt/homebrew/bin/qmd`)
 
-The built-in scheduler (in server-http.ts) checks `memory/features.json` every 60 seconds and sends `[scheduled] /<name>` to the target channel when the cron expression matches.
+The built-in scheduler (in server-http.ts) checks `memory/jobs.json` every 60 seconds and sends `[scheduled] /<name>` to the target channel when the cron expression matches.
 
 ## Recent Context
 <!-- AUTO:recent-context -->
 *This section is auto-updated by the conversation-analysis feature.*
-*Enable with: `/open-claude:configure features enable conversation-analysis --channel <id>`*
+*Enable with: `/open-claude:configure jobs enable conversation-analysis --channel <id>`*
 
 No context available yet.
 <!-- /AUTO:recent-context -->

@@ -77,52 +77,52 @@ Maps to env vars:
 2. Delete `.claude/discord.env`
 3. Confirm
 
-### `features` — manage optional features
+### `jobs` — manage scheduled jobs
+
+The built-in scheduler runs any skill on a cron schedule. Jobs are stored in `memory/jobs.json`. Each job has a name (matching a skill), schedule (cron expression), and target channel.
+
+**Any skill can be a job** — not just the built-in ones. If you create a custom skill `/my-report`, you can schedule it as a job.
 
 Dispatch based on subcommand:
 
-### `features list` — show available features
+### `jobs list` — show all jobs
 
-Read `memory/features.json` (create with `{}` if missing). Show:
+Read `memory/jobs.json` (create with `{}` if missing). Show all entries:
 
-| Feature | Status | Schedule | Channel |
-|---------|--------|----------|---------|
+| Job | Status | Schedule | Channel |
+|-----|--------|----------|---------|
 | conversation-analysis | enabled/disabled | cron expression or — | channel ID or — |
 | qmd | enabled/disabled | — | — |
+| *(any custom jobs)* | | | |
 
-For `qmd`, also check if `/opt/homebrew/bin/qmd` exists and note if missing.
+### `jobs enable <name> [--channel <id>] [--schedule <cron>]`
 
-### `features enable <name> [--channel <id>] [--schedule <cron>]`
+1. Read `memory/jobs.json` (create if missing)
+2. Set `{ "enabled": true, "schedule": "<cron>", "targetChannel": "<id>" }`
+3. Write updated `memory/jobs.json`
 
-1. Read `memory/features.json` (create if missing)
-2. Based on feature name:
+The scheduler sends `[scheduled] /<name>` to the target channel at the scheduled time. The session runs the matching skill.
 
-**conversation-analysis**:
-- Requires `--channel <id>` (Discord thread/channel for results)
-- Default schedule: `30 21 * * *` (21:30 daily)
-- Set `{ "enabled": true, "schedule": "<cron>", "targetChannel": "<id>" }`
-- Create `memory/user-context.json` if it doesn't exist (initial empty structure)
-- Output: "Conversation analysis enabled. Results will be posted to <channel> at <schedule>."
-- Remind: "Restart Claude Code for the scheduler to pick up changes."
+**Built-in defaults:**
+- `conversation-analysis` — default schedule `30 21 * * *`, requires `--channel`
+- `qmd` — no schedule (on-demand only), just `{ "enabled": true }`
 
-**qmd**:
-- Check `/opt/homebrew/bin/qmd` exists — if not, warn and stop
-- Set `{ "enabled": true }`
-- Output: "QMD search enabled. The `search` tool is now available. Run `/qmd-index` to index existing conversations."
-- Remind: "Restart Claude Code for the search tool to appear."
+**Custom job example:**
+```
+/open-claude:configure jobs enable my-report --channel 123456 --schedule "0 9 * * 1"
+```
+This runs `/my-report` every Monday at 9:00 in channel 123456.
 
-3. Write updated `memory/features.json`
+### `jobs disable <name>`
 
-### `features disable <name>`
-
-1. Read `memory/features.json`
-2. Set `enabled: false` for the feature
+1. Read `memory/jobs.json`
+2. Set `enabled: false` for the job
 3. Write
-4. Confirm: "<name> disabled. Restart Claude Code to apply."
+4. Confirm: "<name> disabled."
 
 ## Important
 
 - Never show the full bot token
 - Always preserve file permissions (600 for .env, 700 for directory)
 - After any change, remind: "Restart Claude Code to apply changes."
-- For features, always validate the feature name against the known list
+- For features, always validate the job name against the known list

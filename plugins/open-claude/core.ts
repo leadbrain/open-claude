@@ -141,15 +141,15 @@ export interface OpenClaudeCore {
 
 // ── Scheduler types ──
 
-export interface ScheduledFeature {
+export interface ScheduledJob {
   enabled: boolean
   schedule?: string       // cron expression: "30 21 * * *"
   targetChannel?: string  // Discord channel/thread ID for results
 }
 
-export function loadFeatures(workspace: string): Record<string, ScheduledFeature> {
+export function loadJobs(workspace: string): Record<string, ScheduledJob> {
   try {
-    return JSON.parse(readFileSync(join(workspace, 'memory', 'features.json'), 'utf8'))
+    return JSON.parse(readFileSync(join(workspace, 'memory', 'jobs.json'), 'utf8'))
   } catch { return {} }
 }
 

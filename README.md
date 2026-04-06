@@ -21,7 +21,7 @@ Discord
 server-http.ts (persistent HTTP server)
   ├─ Single Discord gateway connection
   ├─ Access control (gate)
-  ├─ Built-in scheduler (features.json)
+  ├─ Built-in scheduler (jobs.json)
   ├─ Thread spawning (tmux)
   └─ Message queue per session
        │
@@ -121,24 +121,24 @@ Quick reference:
 
 See [ACCESS.md](plugins/open-claude/ACCESS.md) for details.
 
-## Optional features
+## Scheduled jobs
 
-Features are managed via `memory/features.json` and the built-in scheduler:
+Jobs are managed via `memory/jobs.json` and the built-in scheduler:
 
 ```bash
-/open-claude:configure features list                                          # Show status
-/open-claude:configure features enable conversation-analysis --channel <id>   # Enable daily analysis
-/open-claude:configure features disable conversation-analysis                 # Disable
+/open-claude:configure jobs list                                          # Show status
+/open-claude:configure jobs enable conversation-analysis --channel <id>   # Enable daily analysis
+/open-claude:configure jobs disable conversation-analysis                 # Disable
 ```
 
-Available features:
+Available jobs:
 
 | Feature | Description | Schedule |
 |---------|-------------|----------|
 | `conversation-analysis` | Daily conversation summary, updates user context | `30 21 * * *` |
 | `qmd` | Transcript indexing + semantic search | on-demand |
 
-The scheduler checks `memory/features.json` every 60 seconds and sends `[scheduled] /<name>` to the target channel when the cron expression matches.
+The scheduler checks `memory/jobs.json` every 60 seconds and sends `[scheduled] /<name>` to the target channel when the cron expression matches.
 
 ## CLAUDE.md template
 
@@ -196,7 +196,7 @@ Runtime state (in your workspace):
 memory/
 ├── threads/{chat_id}.json # Session ↔ channel mapping
 ├── events/{date}.md       # Cross-session event log
-├── features.json          # Scheduled feature config
+├── jobs.json          # Scheduled jobs config
 └── user-context.json      # User profile & preferences
 ```
 
