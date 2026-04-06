@@ -2,15 +2,15 @@
 /**
  * server-http.ts — Persistent HTTP server for open-claude.
  *
- * Single Discord gateway connection. Exposes:
- *   GET  /events?session=<id>  — SSE stream for proxy to receive Discord messages
- *   POST /api/register         — Proxy registers itself with a session ID + chat_id
- *   POST /api/tools            — Proxy forwards tool calls (reply, react, etc.)
- *   GET  /health               — Server status
+ * Supports simultaneous Discord + Lark connections. Each platform adapter
+ * runs independently; channels are auto-mapped to their platform.
  *
- * Proxy (proxy.ts) connects via stdio to Claude Code and bridges:
- *   Discord message → SSE → proxy → claude/channel notification → Claude
- *   Claude tool call → proxy → POST /api/tools → Discord
+ * Exposes:
+ *   POST /api/register         — Proxy registers with session ID + chat_id
+ *   GET  /api/messages         — Proxy polls for new messages
+ *   POST /api/tools            — Proxy forwards tool calls
+ *   POST /api/ack-clear        — Stop hook clears ack reactions
+ *   GET  /health               — Server status
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'http'
@@ -24,9 +24,8 @@ import {
 } from './core.ts'
 import { DiscordAdapter } from './adapters/discord.ts'
 import { LarkAdapter } from './adapters/lark.ts'
-import type { PlatformAdapter } from './platform.ts'
-import { gatePure, pruneExpired, defaultAccess, chunk, MAX_CHUNK_LIMIT, type GateInput, type Access } from './lib.ts'
-import type { PlatformMessage, PlatformAttachment } from './platform.ts'
+import type { PlatformAdapter, PlatformMessage } from './platform.ts'
+import { gatePure, pruneExpired, chunk, MAX_CHUNK_LIMIT, type GateInput } from './lib.ts'
 import {
   readFileSync, writeFileSync, mkdirSync, existsSync,
   readdirSync, rmSync,
@@ -36,31 +35,8 @@ import { execSync } from 'child_process'
 
 // ── Configuration ──
 
-const PLATFORM = process.env.OPEN_CLAUDE_PLATFORM ?? 'discord'
 const PORT = parseInt(process.env.OPEN_CLAUDE_PORT ?? '3100', 10)
 const config = configFromEnv()
-
-// Platform adapter selection
-let adapter: PlatformAdapter
-let TOKEN: string
-
-if (PLATFORM === 'lark') {
-  TOKEN = process.env.LARK_APP_SECRET ?? ''
-  if (!TOKEN || !process.env.LARK_APP_ID) {
-    process.stderr.write('open-claude: LARK_APP_ID and LARK_APP_SECRET required for Lark mode\n')
-    process.exit(1)
-  }
-  adapter = new LarkAdapter()
-  process.stderr.write('open-claude: using Lark adapter\n')
-} else {
-  TOKEN = process.env.DISCORD_BOT_TOKEN ?? ''
-  if (!TOKEN) {
-    process.stderr.write('open-claude: DISCORD_BOT_TOKEN required\n')
-    process.exit(1)
-  }
-  adapter = new DiscordAdapter()
-}
-
 const accessManager = new AccessManager(config)
 
 process.on('unhandledRejection', err => {
@@ -70,19 +46,52 @@ process.on('uncaughtException', err => {
   process.stderr.write(`open-claude: uncaught exception: ${err}\n`)
 })
 
+// ── Multi-platform adapters ──
+
+const adapters: Record<string, PlatformAdapter> = {}
+const channelPlatform = new Map<string, string>()  // chatId → platform name
+
+// Initialize adapters based on available credentials
+const DISCORD_TOKEN = process.env.DISCORD_BOT_TOKEN
+const LARK_SECRET = process.env.LARK_APP_SECRET
+
+if (!DISCORD_TOKEN && !LARK_SECRET) {
+  process.stderr.write('open-claude: at least one platform required (DISCORD_BOT_TOKEN or LARK_APP_SECRET)\n')
+  process.exit(1)
+}
+
+if (DISCORD_TOKEN) {
+  adapters.discord = new DiscordAdapter()
+}
+if (LARK_SECRET && process.env.LARK_APP_ID) {
+  adapters.lark = new LarkAdapter()
+}
+
+/** Get the adapter for a given channel. Falls back to first available. */
+function getAdapter(chatId?: string): PlatformAdapter {
+  if (chatId) {
+    const platform = channelPlatform.get(chatId)
+    if (platform && adapters[platform]) return adapters[platform]
+  }
+  return Object.values(adapters)[0]
+}
+
+/** Get all bot IDs across platforms */
+function isSelfBot(authorId: string): boolean {
+  return Object.values(adapters).some(a => a.getBotId() === authorId)
+}
+
 // ── Session Registry ──
 
 interface Session {
   sessionId: string
   chatId: string
-  messageQueue: unknown[]  // Messages waiting to be polled by proxy
+  messageQueue: unknown[]
 }
 
 const sessions = new Map<string, Session>()
 const chatToSession = new Map<string, string>()
-
-// Track ack'd messages so we can remove the reaction on reply
-const ackedMessages = new Map<string, { chatId: string; emoji: string }>()  // messageId → { chatId, emoji }
+const ackedMessages = new Map<string, { chatId: string; emoji: string }>()
 
 function getSessionByChatId(chatId: string): Session | undefined {
   const sid = chatToSession.get(chatId)
@@ -90,7 +99,7 @@ function getSessionByChatId(chatId: string): Session | undefined {
 }
 
 function enqueueToSession(session: Session, msg: PlatformMessage): void {
-  adapter.sendTyping(msg.channelId).catch(() => {})
+  getAdapter(msg.channelId).sendTyping(msg.channelId).catch(() => {})
 
   const atts = msg.attachments.map(att => {
     const kb = (att.size / 1024).toFixed(0)
@@ -109,12 +118,10 @@ function enqueueToSession(session: Session, msg: PlatformMessage): void {
       ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
     },
   })
-  process.stderr.write(`open-claude: enqueued for session=${session.sessionId.slice(0, 8)} queue=${session.messageQueue.length}\n`)
 }
 
 function enqueueMessage(session: Session, data: unknown): void {
   session.messageQueue.push(data)
-  // Cap queue at 100
   if (session.messageQueue.length > 100) session.messageQueue.shift()
 }
 
@@ -141,44 +148,37 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
 
-  // ── Health ──
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
+      platforms: Object.keys(adapters),
       sessions: sessions.size,
-      channels: [...chatToSession.entries()].map(([c, s]) => ({ chatId: c, sessionId: s.slice(0, 8) })),
+      channels: [...chatToSession.entries()].map(([c, s]) => ({
+        chatId: c, sessionId: s.slice(0, 8), platform: channelPlatform.get(c) ?? 'unknown',
+      })),
     }))
     return
   }
 
-  // ── Register: proxy tells server which chat_id it handles ──
   if (url.pathname === '/api/register' && req.method === 'POST') {
     try {
       const body = await parseBody(req)
       const chatId = body.chat_id as string
       const sessionId = body.session_id as string || randomUUID()
 
-      // Re-register: keep existing queue
       const existing = sessions.get(sessionId)
       if (existing && existing.chatId === chatId) {
-        process.stderr.write(`open-claude: re-register session=${sessionId.slice(0, 8)} queue=${existing.messageQueue.length}\n`)
         res.writeHead(200, { 'Content-Type': 'application/json' })
         res.end(JSON.stringify({ sessionId, chatId, queued: existing.messageQueue.length }))
         return
       }
 
-      // Cleanup old session for this chat_id
       const oldSid = chatToSession.get(chatId)
-      if (oldSid && oldSid !== sessionId) {
-        sessions.delete(oldSid)
-      }
+      if (oldSid && oldSid !== sessionId) sessions.delete(oldSid)
 
-      const session: Session = { sessionId, chatId, messageQueue: [] }
-      sessions.set(sessionId, session)
+      sessions.set(sessionId, { sessionId, chatId, messageQueue: [] })
       chatToSession.set(chatId, sessionId)
-
       process.stderr.write(`open-claude: registered session=${sessionId.slice(0, 8)} chat=${chatId}\n`)
-
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ sessionId, chatId }))
     } catch (err) {
@@ -188,7 +188,6 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     return
   }
 
-  // ── Messages: proxy polls for new messages ──
   if (url.pathname === '/api/messages' && req.method === 'GET') {
     const sessionId = url.searchParams.get('session')
     if (!sessionId || !sessions.has(sessionId)) {
@@ -197,17 +196,17 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
       return
     }
     const session = sessions.get(sessionId)!
-    const messages = session.messageQueue.splice(0)  // drain queue
+    const messages = session.messageQueue.splice(0)
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ messages }))
     return
   }
 
-  // ── Ack clear: Stop hook notifies response was sent ──
   if (url.pathname === '/api/ack-clear' && req.method === 'POST') {
     try {
       const body = await parseBody(req)
       const chatId = body.chat_id as string
+      const adapter = getAdapter(chatId)
       for (const [msgId, ack] of ackedMessages) {
         if (ack.chatId === chatId) {
           adapter.removeReaction?.(chatId, msgId, ack.emoji)?.catch(() => {})
@@ -223,7 +222,6 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     return
   }
 
-  // ── Tools: proxy forwards Claude's tool calls ──
   if (url.pathname === '/api/tools' && req.method === 'POST') {
     try {
       const body = await parseBody(req)
@@ -245,13 +243,15 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
 // ── Tool handler ──
 
 async function handleToolCall(tool: string, args: Record<string, unknown>): Promise<{ text: string; isError?: boolean }> {
+  const chatId = (args.chat_id ?? args.channel_id ?? args.channel) as string | undefined
+  const adapter = getAdapter(chatId)
+
   switch (tool) {
     case 'reply': {
-      const chatId = args.chat_id as string
+      const id = args.chat_id as string
       const text = args.text as string
       const replyTo = args.reply_to as string | undefined
       const files = (args.files as string[] | undefined) ?? []
-
       if (files.length > 10) throw new Error('max 10 attachments')
 
       const access = accessManager.load()
@@ -263,31 +263,28 @@ async function handleToolCall(tool: string, args: Record<string, unknown>): Prom
 
       for (let i = 0; i < chunks.length; i++) {
         const shouldReplyTo = replyTo != null && replyMode !== 'off' && (replyMode === 'all' || i === 0)
-        const id = await adapter.sendMessage(chatId, {
+        const sentId = await adapter.sendMessage(id, {
           content: chunks[i],
           ...(i === 0 && files.length > 0 ? { files } : {}),
           ...(shouldReplyTo ? { replyTo } : {}),
         })
-        sentIds.push(id)
+        sentIds.push(sentId)
       }
-
       return { text: sentIds.length === 1 ? `sent (id: ${sentIds[0]})` : `sent ${sentIds.length} parts` }
     }
 
-    case 'react': {
+    case 'react':
       await adapter.react(args.chat_id as string, args.message_id as string, args.emoji as string)
       return { text: 'reacted' }
-    }
 
-    case 'edit_message': {
+    case 'edit_message':
       await adapter.editMessage(args.chat_id as string, args.message_id as string, args.text as string)
       return { text: 'edited' }
-    }
 
     case 'fetch_messages': {
       const channelId = args.channel as string
-      const limit = Math.min((args.limit as number) ?? 20, 100)
-      const msgs = await adapter.fetchMessages(channelId, limit)
+      const fetchLimit = Math.min((args.limit as number) ?? 20, 100)
+      const msgs = await adapter.fetchMessages(channelId, fetchLimit)
       const me = adapter.getBotId()
       const out = msgs.length === 0
         ? '(no messages)'
@@ -302,10 +299,8 @@ async function handleToolCall(tool: string, args: Record<string, unknown>): Prom
 
     case 'create_thread': {
       if (!adapter.createThread) return { text: 'create_thread not supported on this platform', isError: true }
-      const channelId = args.channel_id as string ?? config.mainChannel
-      const name = args.name as string
-      const message = args.message as string | undefined
-      const threadId = await adapter.createThread(channelId, name, message)
+      const chId = args.channel_id as string ?? config.mainChannel
+      const threadId = await adapter.createThread(chId, args.name as string, args.message as string | undefined)
       return { text: `created thread (id: ${threadId})` }
     }
 
@@ -314,10 +309,10 @@ async function handleToolCall(tool: string, args: Record<string, unknown>): Prom
       if (!existsSync(qmdPath)) return { text: 'QMD not available', isError: true }
       const query = (args.query as string).replace(/"/g, '\\"')
       const collection = (args.collection as string) ?? 'all'
-      const mode = (args.mode as string) ?? 'search'
-      const limit = (args.limit as number) ?? 5
+      const searchMode = (args.mode as string) ?? 'search'
+      const searchLimit = (args.limit as number) ?? 5
       const collectionArg = collection === 'all' ? '' : `-c ${collection}`
-      const result = execSync(`${qmdPath} ${mode} ${collectionArg} -n ${limit} "${query}"`, { encoding: 'utf8', timeout: 15000 })
+      const result = execSync(`${qmdPath} ${searchMode} ${collectionArg} -n ${searchLimit} "${query}"`, { encoding: 'utf8', timeout: 15000 })
       return { text: result || '(no results)' }
     }
 
@@ -326,13 +321,15 @@ async function handleToolCall(tool: string, args: Record<string, unknown>): Prom
   }
 }
 
-// ── Discord Message Handler ──
+// ── Shared message handler (called by all platform adapters) ──
 
-adapter.onMessage(async (msg: PlatformMessage) => {
-  process.stderr.write(`open-claude: onMessage from=${msg.authorName} ch=${msg.channelId} isBot=${msg.isBot} isDM=${msg.isDM}\n`)
+async function handleMessage(msg: PlatformMessage, platformName: string): Promise<void> {
+  // Record which platform this channel belongs to
+  channelPlatform.set(msg.channelId, platformName)
+
   // Bot filter — allow own [scheduled] messages only
   if (msg.isBot) {
-    if (msg.authorId !== adapter.getBotId() || !msg.content.startsWith('[scheduled]')) return
+    if (!isSelfBot(msg.authorId) || !msg.content.startsWith('[scheduled]')) return
   }
 
   // Gate check
@@ -342,9 +339,11 @@ adapter.onMessage(async (msg: PlatformMessage) => {
 
   let isMentioned = msg.mentionsBot
   if (!isMentioned && msg.reference?.messageId) {
+    const adapter = getAdapter(msg.channelId)
     if (adapter.isReplyToBot) isMentioned = await adapter.isReplyToBot(msg)
   }
   if (!isMentioned && access.mentionPatterns?.length) {
+    const adapter = getAdapter(msg.channelId)
     isMentioned = adapter.matchesPatterns?.(msg.content, access.mentionPatterns) ?? false
   }
 
@@ -358,9 +357,8 @@ adapter.onMessage(async (msg: PlatformMessage) => {
   }
 
   const result = gatePure(gateInput, access)
-  process.stderr.write(`open-claude: gate=${result.action} mention=${isMentioned}\n`)
-
   if (result.action === 'drop') return
+
   if (result.action === 'need_pair') {
     const { randomBytes } = await import('crypto')
     const code = randomBytes(3).toString('hex')
@@ -371,13 +369,14 @@ adapter.onMessage(async (msg: PlatformMessage) => {
     }
     accessManager.save(access)
     try {
-      await adapter.sendMessage(msg.channelId, {
+      await getAdapter(msg.channelId).sendMessage(msg.channelId, {
         content: `Pairing required — approve from your terminal with the code:\n\n\`${code}\``,
         replyTo: msg.id,
       })
     } catch {}
     return
   }
+
   if (result.action === 'pair') {
     const pending = access.pending[result.code]
     if (pending) {
@@ -385,7 +384,7 @@ adapter.onMessage(async (msg: PlatformMessage) => {
       accessManager.save(access)
     }
     try {
-      await adapter.sendMessage(msg.channelId, {
+      await getAdapter(msg.channelId).sendMessage(msg.channelId, {
         content: `Still pending — approve code \`${result.code}\` from your terminal.`,
         replyTo: msg.id,
       })
@@ -395,7 +394,7 @@ adapter.onMessage(async (msg: PlatformMessage) => {
 
   // Ack reaction
   if (access.ackReaction) {
-    adapter.react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
+    getAdapter(msg.channelId).react(msg.channelId, msg.id, access.ackReaction).catch(() => {})
     ackedMessages.set(msg.id, { chatId: msg.channelId, emoji: access.ackReaction })
   }
 
@@ -403,24 +402,32 @@ adapter.onMessage(async (msg: PlatformMessage) => {
   if (msg.isThread && msg.channelId !== config.mainChannel) {
     const threadSession = getSessionByChatId(msg.channelId)
     if (threadSession) {
-      // Thread has its own session — enqueue there
       enqueueToSession(threadSession, msg)
       return
     }
-    // No thread session yet — spawn one (don't fall through to main)
     spawnThreadSession(msg)
     return
   }
 
-  // Route to session — enqueue for polling
+  // Route to session
   const session = getSessionByChatId(msg.channelId)
   if (session) {
     enqueueToSession(session, msg)
     return
   }
 
-  process.stderr.write(`open-claude: no session for ch=${msg.channelId}, dropping\n`)
-})
+  process.stderr.write(`open-claude: no session for ch=${msg.channelId} (${platformName}), dropping\n`)
+}
+
+// ── Register message handlers for all adapters ──
+
+for (const [name, adapter] of Object.entries(adapters)) {
+  adapter.onMessage((msg: PlatformMessage) => {
+    handleMessage(msg, name).catch(err => {
+      process.stderr.write(`open-claude: handleMessage failed (${name}): ${err}\n`)
+    })
+  })
+}
 
 // ── Thread Spawning ──
 
@@ -438,7 +445,7 @@ function spawnThreadSession(msg: PlatformMessage): void {
   } catch {}
 
   process.stderr.write(`open-claude: spawning thread session for ${chatId}\n`)
-  adapter.sendTyping(chatId).catch(() => {})
+  getAdapter(chatId).sendTyping(chatId).catch(() => {})
 
   const threadsDir = join(config.workspace, 'memory', 'threads')
   mkdirSync(threadsDir, { recursive: true })
@@ -451,13 +458,11 @@ function spawnThreadSession(msg: PlatformMessage): void {
 
   const promptFile = join(config.workspace, '.claude', 'discord', `prompt-${chatId}.txt`)
   mkdirSync(join(config.workspace, '.claude', 'discord'), { recursive: true })
-  const prompt = `<channel source="discord" chat_id="${chatId}" message_id="${msg.id}" user="${msg.authorName}" user_id="${msg.authorId}" ts="${msg.createdAt.toISOString()}">\n${msg.content}\n</channel>`
+  const prompt = `<channel source="${channelPlatform.get(chatId) ?? 'discord'}" chat_id="${chatId}" message_id="${msg.id}" user="${msg.authorName}" user_id="${msg.authorId}" ts="${msg.createdAt.toISOString()}">\n${msg.content}\n</channel>`
   writeFileSync(promptFile, prompt)
 
-  // OPEN_CLAUDE_CHAT_ID must NOT be in .mcp.json — set via shell env only
-  // so each thread gets its own chat_id while sharing the same .mcp.json
   const envExports = Object.entries(process.env)
-    .filter(([k]) => k.startsWith('DISCORD_') || k === 'OPEN_CLAUDE_WORKSPACE' || k === 'OPEN_CLAUDE_PORT')
+    .filter(([k]) => k.startsWith('DISCORD_') || k.startsWith('LARK_') || k === 'OPEN_CLAUDE_WORKSPACE' || k === 'OPEN_CLAUDE_PORT')
     .map(([k, v]) => `export ${k}='${(v ?? '').replace(/'/g, "'\\''")}'`)
     .join(' && ')
 
@@ -466,7 +471,6 @@ function spawnThreadSession(msg: PlatformMessage): void {
 
   try {
     execSync(`tmux new-window -t ${tmuxSession} -n ${windowName} '${cmd.replace(/'/g, "'\\''")}'`, { timeout: 5000 })
-    // Auto-approve development channels prompt
     setTimeout(() => {
       try { execSync(`tmux send-keys -t ${tmuxSession}:${windowName} Enter`, { timeout: 3000 }) } catch {}
     }, 3000)
@@ -481,10 +485,10 @@ function spawnThreadSession(msg: PlatformMessage): void {
 setInterval(() => {
   const jobs = loadJobs(config.workspace)
   const now = new Date()
-  for (const [name, job] of Object.entries(features)) {
+  for (const [name, job] of Object.entries(jobs)) {
     if (!job.enabled || !job.schedule || !job.targetChannel) continue
     if (!matchesCron(job.schedule, now)) continue
-    adapter.sendMessage(job.targetChannel, {
+    getAdapter(job.targetChannel).sendMessage(job.targetChannel, {
       content: `[scheduled] /${name}`,
     }).catch(err => {
       process.stderr.write(`open-claude: scheduler ${name} failed: ${err}\n`)
@@ -505,17 +509,17 @@ if (!config.staticMode) {
         rmSync(file, { force: true }); continue
       }
       if (!dmChannelId) { rmSync(file, { force: true }); continue }
-      adapter.sendMessage(dmChannelId, { content: "Paired! Say hi to Claude." })
+      getAdapter(dmChannelId).sendMessage(dmChannelId, { content: "Paired! Say hi to Claude." })
         .then(() => rmSync(file, { force: true }))
         .catch(() => rmSync(file, { force: true }))
     }
   }, 5000).unref()
 }
 
-// ── Slash Commands ──
+// ── Slash Commands (Discord-specific) ──
 
-if (adapter.onInteraction) {
-  adapter.onInteraction(async (interaction: any) => {
+if (adapters.discord?.onInteraction) {
+  adapters.discord.onInteraction(async (interaction: any) => {
     if (!interaction.isChatInputCommand?.()) return
     const { commandName } = interaction
     const tmux = config.tmuxSession
@@ -561,30 +565,45 @@ let shuttingDown = false
 function shutdown(): void {
   if (shuttingDown) return
   shuttingDown = true
-  process.stderr.write('open-claude: shutting down HTTP server\n')
+  process.stderr.write('open-claude: shutting down\n')
   httpServer.close()
+  const destroyPromises = Object.values(adapters).map(a => a.destroy())
   setTimeout(() => process.exit(0), 2000)
-  void adapter.destroy().finally(() => process.exit(0))
+  void Promise.all(destroyPromises).finally(() => process.exit(0))
 }
 process.on('SIGTERM', shutdown)
 process.on('SIGINT', shutdown)
 
 // ── Start ──
 
-adapter.onReady((botId, botName) => {
-  process.stderr.write(`open-claude: Discord connected as ${botName}\n`)
-  const discordAdapter = adapter as any
-  if (discordAdapter.registerSlashCommands && discordAdapter.getClient) {
-    const client = discordAdapter.getClient()
-    const guildIds = [...client.guilds.cache.keys()]
-    discordAdapter.registerSlashCommands(guildIds).catch((err: Error) => {
-      process.stderr.write(`open-claude: slash command registration failed: ${err}\n`)
-    })
-  }
-})
+// Register ready handlers
+for (const [name, adapter] of Object.entries(adapters)) {
+  adapter.onReady((botId, botName) => {
+    process.stderr.write(`open-claude: ${name} connected as ${botName}\n`)
+    if (name === 'discord') {
+      const da = adapter as any
+      if (da.registerSlashCommands && da.getClient) {
+        const client = da.getClient()
+        const guildIds = [...client.guilds.cache.keys()]
+        da.registerSlashCommands(guildIds).catch((err: Error) => {
+          process.stderr.write(`open-claude: slash command registration failed: ${err}\n`)
+        })
+      }
+    }
+  })
+}
 
+// Start HTTP server
 httpServer.listen(PORT, '127.0.0.1', () => {
   process.stderr.write(`open-claude: HTTP server on http://127.0.0.1:${PORT}\n`)
 })
 
-await adapter.login(TOKEN)
+// Login all adapters
+const loginPromises: Promise<void>[] = []
+if (adapters.discord && DISCORD_TOKEN) {
+  loginPromises.push(adapters.discord.login(DISCORD_TOKEN))
+}
+if (adapters.lark && LARK_SECRET) {
+  loginPromises.push(adapters.lark.login(LARK_SECRET))
+}
+await Promise.all(loginPromises)
