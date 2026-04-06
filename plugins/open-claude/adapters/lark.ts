@@ -58,8 +58,8 @@ export class LarkAdapter implements PlatformAdapter {
   private apiBase: string
 
   constructor() {
-    this.domain = process.env.LARK_DOMAIN ?? 'lark'
-    this.apiBase = this.domain === 'feishu' ? FEISHU_API : LARK_API
+    this.domain = process.env.LARK_DOMAIN ?? 'feishu'  // Default feishu (matches OpenClaw)
+    this.apiBase = this.domain === 'lark' ? LARK_API : FEISHU_API
   }
 
   async login(token: string): Promise<void> {
