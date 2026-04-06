@@ -103,6 +103,7 @@ OPEN_CLAUDE_WORKSPACE=/path/to/ws  # Workspace path
 # Lark (optional — add to enable, uses WebSocket, no public URL needed)
 LARK_APP_ID=cli_xxx                # App ID
 LARK_APP_SECRET=xxx                # App Secret
+LARK_MAIN_CHANNEL=oc_xxx           # Lark main chat ID
 OPEN_CLAUDE_PLATFORM=lark          # For hooks to use Lark API
 ```
 

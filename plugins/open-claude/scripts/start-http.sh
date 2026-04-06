@@ -64,9 +64,22 @@ sleep 2
 tmux new-window -t "$TMUX_SESSION" -n main \
   "${ENV_EXPORTS}export OPEN_CLAUDE_SERVER='http://localhost:${OPEN_CLAUDE_PORT:-3100}' && export OPEN_CLAUDE_CHAT_ID='${DISCORD_MAIN_CHANNEL}' && cd '$WORKSPACE' && claude --dangerously-skip-permissions --dangerously-load-development-channels server:open-claude; echo 'Claude exited. Press Enter.'; read"
 
+# Window 3: Lark session (if LARK_APP_ID is set)
+if [ -n "${LARK_APP_ID:-}" ]; then
+  # Find Lark main chat_id from discord.env — use LARK_MAIN_CHANNEL if set, else prompt
+  LARK_CHAT_ID="${LARK_MAIN_CHANNEL:-}"
+  if [ -z "$LARK_CHAT_ID" ]; then
+    echo "Note: LARK_MAIN_CHANNEL not set in discord.env. Lark session will register when first message arrives."
+  else
+    tmux new-window -t "$TMUX_SESSION" -n lark \
+      "${ENV_EXPORTS}export OPEN_CLAUDE_SERVER='http://localhost:${OPEN_CLAUDE_PORT:-3100}' && export OPEN_CLAUDE_CHAT_ID='${LARK_CHAT_ID}' && cd '$WORKSPACE' && claude --dangerously-skip-permissions --dangerously-load-development-channels server:open-claude; echo 'Lark session exited. Press Enter.'; read"
+  fi
+fi
+
 # Auto-approve the development channels prompt
 sleep 3
 tmux send-keys -t "$TMUX_SESSION":main Enter 2>/dev/null
+[ -n "${LARK_CHAT_ID:-}" ] && tmux send-keys -t "$TMUX_SESSION":lark Enter 2>/dev/null
 
 echo "Started! Attaching to tmux session..."
 echo "  Detach: Ctrl-b d"

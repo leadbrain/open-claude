@@ -159,10 +159,11 @@ DISCORD_BOT_TOKEN=<token>
 # Lark (include if using Lark)
 LARK_APP_ID=<app_id>
 LARK_APP_SECRET=<app_secret>
+LARK_MAIN_CHANNEL=<lark chat_id, e.g. oc_xxx>
 OPEN_CLAUDE_PLATFORM=lark
 
 # Common
-DISCORD_MAIN_CHANNEL=<main channel/chat ID>
+DISCORD_MAIN_CHANNEL=<Discord main channel ID>
 OPEN_CLAUDE_WORKSPACE=<workspace path (pwd)>
 ```
 
