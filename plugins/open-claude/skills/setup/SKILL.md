@@ -27,10 +27,11 @@ Arguments passed: `$ARGUMENTS`
 
 ## Step 1: Check prerequisites
 
-Check if `bun` and `jq` are available in PATH:
+Check if `bun`, `jq`, and `tmux` are available in PATH:
 ```bash
 which bun
 which jq
+which tmux
 ```
 
 If `bun` is not found:
@@ -53,7 +54,13 @@ If `jq` is not found:
 - **macOS**: `brew install jq`
 - **Linux**: `apt install jq` or `yum install jq`
 
-If both are installed, say so and move on.
+If `tmux` is not found:
+- **macOS**: `brew install tmux`
+- **Linux**: `apt install tmux` or `yum install tmux`
+
+tmux is required — the HTTP server and Claude Code sessions run in separate tmux windows.
+
+If all three are installed, say so and move on.
 
 ## Step 2: Check existing configuration
 

@@ -41,8 +41,9 @@ Claude Code session
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (CLI)
 - [Bun](https://bun.sh) (runtime)
+- [tmux](https://github.com/tmux/tmux) (session management)
 - [jq](https://jqlang.github.io/jq/) (JSON processing in hooks)
-- A Discord bot token
+- A Discord bot token (or Lark app credentials)
 
 ## Setup
 
