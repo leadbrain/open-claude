@@ -84,18 +84,19 @@ export class LarkAdapter implements PlatformAdapter {
     // Register message handler
     eventDispatcher.register({
       'im.message.receive_v1': (event: any) => {
+        process.stderr.write(`lark-adapter: received event im.message.receive_v1\n`)
         this.handleEvent(event)
       },
     })
 
-    // Create WebSocket client
+    // Create WebSocket client and start with event dispatcher
     this.wsClient = new sdk.WSClient({
       appId,
       appSecret,
       domain: this.domain === 'feishu' ? sdk.Domain.Feishu : sdk.Domain.Lark,
-      eventDispatcher,
-      autoReconnect: true,
+      loggerLevel: sdk.LoggerLevel.info,
     })
+    this.wsClient.start({ eventDispatcher })
 
     // Fetch bot info
     await this.fetchBotInfo()
@@ -295,9 +296,14 @@ export class LarkAdapter implements PlatformAdapter {
   }
 
   private handleEvent(event: any): void {
+    process.stderr.write(`lark-adapter: handleEvent keys=${JSON.stringify(Object.keys(event ?? {}))}\n`)
     const msg = event?.message
     const sender = event?.sender
-    if (!msg || !sender) return
+    if (!msg || !sender) {
+      process.stderr.write(`lark-adapter: no message or sender in event\n`)
+      return
+    }
+    process.stderr.write(`lark-adapter: msg from ${sender.sender_type} chat=${msg.chat_id} type=${msg.msg_type}\n`)
     if (sender.sender_type === 'app') return // Skip bot messages
 
     const content = this.extractTextContent(msg)
