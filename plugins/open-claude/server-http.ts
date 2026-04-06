@@ -89,6 +89,29 @@ function getSessionByChatId(chatId: string): Session | undefined {
   return sid ? sessions.get(sid) : undefined
 }
 
+function enqueueToSession(session: Session, msg: PlatformMessage): void {
+  adapter.sendTyping(msg.channelId).catch(() => {})
+
+  const atts = msg.attachments.map(att => {
+    const kb = (att.size / 1024).toFixed(0)
+    return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
+  })
+  const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
+
+  enqueueMessage(session, {
+    content,
+    meta: {
+      chat_id: msg.channelId,
+      message_id: msg.id,
+      user: msg.authorName,
+      user_id: msg.authorId,
+      ts: msg.createdAt.toISOString(),
+      ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
+    },
+  })
+  process.stderr.write(`open-claude: enqueued for session=${session.sessionId.slice(0, 8)} queue=${session.messageQueue.length}\n`)
+}
+
 function enqueueMessage(session: Session, data: unknown): void {
   session.messageQueue.push(data)
   // Cap queue at 100
@@ -376,35 +399,23 @@ adapter.onMessage(async (msg: PlatformMessage) => {
     ackedMessages.set(msg.id, { chatId: msg.channelId, emoji: access.ackReaction })
   }
 
-  // Route to session — enqueue for polling
-  const session = getSessionByChatId(msg.channelId)
-  if (session) {
-    adapter.sendTyping(msg.channelId).catch(() => {})
-
-    const atts = msg.attachments.map(att => {
-      const kb = (att.size / 1024).toFixed(0)
-      return `${att.name} (${att.contentType ?? 'unknown'}, ${kb}KB)`
-    })
-    const content = msg.content || (atts.length > 0 ? '(attachment)' : '')
-
-    enqueueMessage(session, {
-      content,
-      meta: {
-        chat_id: msg.channelId,
-        message_id: msg.id,
-        user: msg.authorName,
-        user_id: msg.authorId,
-        ts: msg.createdAt.toISOString(),
-        ...(atts.length > 0 ? { attachment_count: String(atts.length), attachments: atts.join('; ') } : {}),
-      },
-    })
-    process.stderr.write(`open-claude: enqueued for session=${session.sessionId.slice(0, 8)} queue=${session.messageQueue.length}\n`)
+  // Thread check — spawn dedicated session before routing to main
+  if (msg.isThread && msg.channelId !== config.mainChannel) {
+    const threadSession = getSessionByChatId(msg.channelId)
+    if (threadSession) {
+      // Thread has its own session — enqueue there
+      enqueueToSession(threadSession, msg)
+      return
+    }
+    // No thread session yet — spawn one (don't fall through to main)
+    spawnThreadSession(msg)
     return
   }
 
-  // Thread with no session — spawn
-  if (msg.isThread && msg.channelId !== config.mainChannel) {
-    spawnThreadSession(msg)
+  // Route to session — enqueue for polling
+  const session = getSessionByChatId(msg.channelId)
+  if (session) {
+    enqueueToSession(session, msg)
     return
   }
 
