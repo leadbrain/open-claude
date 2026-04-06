@@ -1,43 +1,43 @@
 /**
- * Tests for server-http.ts HTTP endpoints.
+ * Integration tests for server-http.ts HTTP endpoints.
  *
- * Starts a real HTTP server on a random port and tests:
- * - /health endpoint
+ * Tests the actual API contract that proxy.ts depends on:
+ * - /health
  * - /api/register — session registration
- * - /events — SSE stream
- * - /api/tools — tool proxying
- * - Message routing via SSE
+ * - /api/messages — message polling (proxy polls this)
+ * - /api/tools — tool call forwarding
+ * - /api/ack-clear — ack reaction removal
+ * - Message enqueue + drain cycle
+ *
+ * Uses a minimal test server that mirrors the real API.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
 import { createServer, type Server as HttpServer } from 'http'
 
-// We test the HTTP endpoints by importing the handler logic indirectly.
-// Since server-http.ts has side effects (Discord login), we test the
-// endpoints by spinning up a minimal HTTP server that mimics the API.
-
-// ── Minimal SSE + API server for testing ──
+// ── Test server mirroring real server-http.ts API ──
 
 interface TestSession {
   sessionId: string
   chatId: string
-  sseRes: any | null
+  messageQueue: unknown[]
 }
 
 function createTestServer() {
   const sessions = new Map<string, TestSession>()
   const chatToSession = new Map<string, string>()
   const toolCalls: { tool: string; args: any }[] = []
-
-  function sendSSE(session: TestSession, event: string, data: unknown): boolean {
-    if (!session.sseRes || session.sseRes.writableEnded) return false
-    session.sseRes.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-    return true
-  }
+  const ackClears: string[] = []
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://localhost`)
+    const url = new URL(req.url ?? '/', 'http://localhost')
+    const parseBody = () => new Promise<any>((resolve) => {
+      let data = ''
+      req.on('data', (c: Buffer) => { data += c })
+      req.on('end', () => resolve(data ? JSON.parse(data) : {}))
+    })
 
+    // Health
     if (url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({
@@ -47,48 +47,59 @@ function createTestServer() {
       return
     }
 
+    // Register
     if (url.pathname === '/api/register' && req.method === 'POST') {
-      let data = ''
-      req.on('data', chunk => { data += chunk })
-      req.on('end', () => {
-        const body = JSON.parse(data)
-        const sessionId = body.session_id || `test-${Date.now()}`
-        const chatId = body.chat_id
-        sessions.set(sessionId, { sessionId, chatId, sseRes: null })
-        chatToSession.set(chatId, sessionId)
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ sessionId, chatId }))
-      })
-      return
-    }
+      const body = await parseBody()
+      const sessionId = body.session_id || `test-${Date.now()}`
+      const chatId = body.chat_id
 
-    if (url.pathname === '/events' && req.method === 'GET') {
-      const sessionId = url.searchParams.get('session')
-      if (!sessionId || !sessions.has(sessionId)) {
-        res.writeHead(404)
-        res.end('session not found')
+      const existing = sessions.get(sessionId)
+      if (existing && existing.chatId === chatId) {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ sessionId, chatId, queued: existing.messageQueue.length }))
         return
       }
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      })
-      res.write(`event: connected\ndata: ${JSON.stringify({ sessionId })}\n\n`)
-      sessions.get(sessionId)!.sseRes = res
-      req.on('close', () => { sessions.get(sessionId)!.sseRes = null })
+
+      const oldSid = chatToSession.get(chatId)
+      if (oldSid && oldSid !== sessionId) sessions.delete(oldSid)
+
+      sessions.set(sessionId, { sessionId, chatId, messageQueue: [] })
+      chatToSession.set(chatId, sessionId)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ sessionId, chatId }))
       return
     }
 
+    // Messages (polling)
+    if (url.pathname === '/api/messages' && req.method === 'GET') {
+      const sessionId = url.searchParams.get('session')
+      if (!sessionId || !sessions.has(sessionId)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'session not found' }))
+        return
+      }
+      const session = sessions.get(sessionId)!
+      const messages = session.messageQueue.splice(0)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ messages }))
+      return
+    }
+
+    // Tools
     if (url.pathname === '/api/tools' && req.method === 'POST') {
-      let data = ''
-      req.on('data', chunk => { data += chunk })
-      req.on('end', () => {
-        const body = JSON.parse(data)
-        toolCalls.push(body)
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ text: `${body.tool} ok` }))
-      })
+      const body = await parseBody()
+      toolCalls.push(body)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ text: `${body.tool} ok` }))
+      return
+    }
+
+    // Ack clear
+    if (url.pathname === '/api/ack-clear' && req.method === 'POST') {
+      const body = await parseBody()
+      ackClears.push(body.chat_id)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true }))
       return
     }
 
@@ -96,33 +107,32 @@ function createTestServer() {
     res.end()
   })
 
-  return { server, sessions, chatToSession, toolCalls, sendSSE }
+  return { server, sessions, chatToSession, toolCalls, ackClears }
 }
 
 // ── Tests ──
 
-let testServer: ReturnType<typeof createTestServer>
+let ts: ReturnType<typeof createTestServer>
 let port: number
 let baseUrl: string
 
 beforeAll(async () => {
-  testServer = createTestServer()
+  ts = createTestServer()
   await new Promise<void>(resolve => {
-    testServer.server.listen(0, '127.0.0.1', () => {
-      const addr = testServer.server.address() as { port: number }
-      port = addr.port
+    ts.server.listen(0, '127.0.0.1', () => {
+      port = (ts.server.address() as { port: number }).port
       baseUrl = `http://127.0.0.1:${port}`
       resolve()
     })
   })
 })
 
-afterAll(() => {
-  testServer.server.close()
-})
+afterAll(() => { ts.server.close() })
 
-describe('HTTP server: /health', () => {
-  test('returns session count', async () => {
+// ── /health ──
+
+describe('/health', () => {
+  test('returns empty state initially', async () => {
     const res = await fetch(`${baseUrl}/health`)
     const data = await res.json() as any
     expect(data.sessions).toBe(0)
@@ -130,8 +140,10 @@ describe('HTTP server: /health', () => {
   })
 })
 
-describe('HTTP server: /api/register', () => {
-  test('registers a session', async () => {
+// ── /api/register ──
+
+describe('/api/register', () => {
+  test('registers a new session', async () => {
     const res = await fetch(`${baseUrl}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -141,90 +153,81 @@ describe('HTTP server: /api/register', () => {
     expect(data.sessionId).toBe('sess-1')
     expect(data.chatId).toBe('ch-100')
 
-    // Health should reflect
     const health = await (await fetch(`${baseUrl}/health`)).json() as any
     expect(health.sessions).toBe(1)
   })
 
-  test('replaces existing session for same chat_id', async () => {
+  test('re-register preserves queue', async () => {
+    // Enqueue a message first
+    ts.sessions.get('sess-1')!.messageQueue.push({ content: 'queued msg' })
+
+    const res = await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: 'sess-1', chat_id: 'ch-100' }),
+    })
+    const data = await res.json() as any
+    expect(data.queued).toBe(1)
+
+    // Queue should still have the message
+    expect(ts.sessions.get('sess-1')!.messageQueue).toHaveLength(1)
+  })
+
+  test('replaces different session for same chat_id', async () => {
     await fetch(`${baseUrl}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: 'sess-2', chat_id: 'ch-100' }),
     })
-
-    const health = await (await fetch(`${baseUrl}/health`)).json() as any
-    // sess-1 was replaced by sess-2
-    expect(health.channels.find((c: any) => c.chatId === 'ch-100').sessionId).toBe('sess-2')
+    expect(ts.sessions.has('sess-1')).toBe(false)
+    expect(ts.sessions.has('sess-2')).toBe(true)
   })
 })
 
-describe('HTTP server: /events (SSE)', () => {
-  test('establishes SSE connection', async () => {
-    // Register first
+// ── /api/messages (polling) ──
+
+describe('/api/messages', () => {
+  test('returns empty when no messages', async () => {
     await fetch(`${baseUrl}/api/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: 'sse-test', chat_id: 'ch-sse' }),
+      body: JSON.stringify({ session_id: 'poll-1', chat_id: 'ch-poll' }),
     })
 
-    // Connect SSE
-    const res = await fetch(`${baseUrl}/events?session=sse-test`, {
-      headers: { Accept: 'text/event-stream' },
-    })
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toBe('text/event-stream')
-
-    // Read first event
-    const reader = res.body!.getReader()
-    const { value } = await reader.read()
-    const text = new TextDecoder().decode(value)
-    expect(text).toContain('event: connected')
-    expect(text).toContain('sse-test')
-
-    reader.cancel()
+    const res = await fetch(`${baseUrl}/api/messages?session=poll-1`)
+    const data = await res.json() as any
+    expect(data.messages).toEqual([])
   })
 
-  test('receives message via SSE', async () => {
-    // Register
-    await fetch(`${baseUrl}/api/register`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: 'sse-msg', chat_id: 'ch-msg' }),
-    })
+  test('returns and drains queued messages', async () => {
+    const session = ts.sessions.get('poll-1')!
+    session.messageQueue.push(
+      { content: 'msg1', meta: { user: 'alice' } },
+      { content: 'msg2', meta: { user: 'bob' } },
+    )
 
-    // Connect SSE
-    const res = await fetch(`${baseUrl}/events?session=sse-msg`, {
-      headers: { Accept: 'text/event-stream' },
-    })
-    const reader = res.body!.getReader()
-    // Skip connected event
-    await reader.read()
+    const res = await fetch(`${baseUrl}/api/messages?session=poll-1`)
+    const data = await res.json() as any
+    expect(data.messages).toHaveLength(2)
+    expect(data.messages[0].content).toBe('msg1')
+    expect(data.messages[1].content).toBe('msg2')
 
-    // Send message via SSE
-    const session = testServer.sessions.get('sse-msg')!
-    testServer.sendSSE(session, 'message', {
-      content: 'hello from Discord',
-      meta: { chat_id: 'ch-msg', user: 'testuser' },
-    })
-
-    // Read message event
-    const { value } = await reader.read()
-    const text = new TextDecoder().decode(value)
-    expect(text).toContain('event: message')
-    expect(text).toContain('hello from Discord')
-
-    reader.cancel()
+    // Queue should be drained
+    const res2 = await fetch(`${baseUrl}/api/messages?session=poll-1`)
+    const data2 = await res2.json() as any
+    expect(data2.messages).toEqual([])
   })
 
   test('returns 404 for unknown session', async () => {
-    const res = await fetch(`${baseUrl}/events?session=nonexistent`)
+    const res = await fetch(`${baseUrl}/api/messages?session=nonexistent`)
     expect(res.status).toBe(404)
   })
 })
 
-describe('HTTP server: /api/tools', () => {
-  test('forwards tool call and returns result', async () => {
+// ── /api/tools ──
+
+describe('/api/tools', () => {
+  test('forwards reply tool', async () => {
     const res = await fetch(`${baseUrl}/api/tools`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -232,7 +235,74 @@ describe('HTTP server: /api/tools', () => {
     })
     const data = await res.json() as any
     expect(data.text).toBe('reply ok')
-    expect(testServer.toolCalls.length).toBeGreaterThanOrEqual(1)
-    expect(testServer.toolCalls.at(-1)!.tool).toBe('reply')
+    expect(ts.toolCalls.at(-1)!.tool).toBe('reply')
+  })
+
+  test('forwards react tool', async () => {
+    await fetch(`${baseUrl}/api/tools`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'react', args: { chat_id: 'ch-1', message_id: 'msg-1', emoji: '👍' } }),
+    })
+    expect(ts.toolCalls.at(-1)!.args.emoji).toBe('👍')
+  })
+})
+
+// ── /api/ack-clear ──
+
+describe('/api/ack-clear', () => {
+  test('accepts ack clear request', async () => {
+    const res = await fetch(`${baseUrl}/api/ack-clear`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: 'ch-100' }),
+    })
+    const data = await res.json() as any
+    expect(data.ok).toBe(true)
+    expect(ts.ackClears).toContain('ch-100')
+  })
+})
+
+// ── Full polling flow ──
+
+describe('Full flow: register → enqueue → poll → drain', () => {
+  test('end-to-end message delivery via polling', async () => {
+    // 1. Register
+    await fetch(`${baseUrl}/api/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: 'e2e', chat_id: 'ch-e2e' }),
+    })
+
+    // 2. Enqueue (simulates Discord message arriving at server)
+    ts.sessions.get('e2e')!.messageQueue.push({
+      content: 'hello from Discord',
+      meta: { chat_id: 'ch-e2e', user: 'testuser', message_id: 'msg-e2e' },
+    })
+
+    // 3. Poll (simulates proxy polling)
+    const res = await fetch(`${baseUrl}/api/messages?session=e2e`)
+    const data = await res.json() as any
+    expect(data.messages).toHaveLength(1)
+    expect(data.messages[0].content).toBe('hello from Discord')
+
+    // 4. Reply (simulates proxy forwarding tool call)
+    const toolRes = await fetch(`${baseUrl}/api/tools`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'reply', args: { chat_id: 'ch-e2e', text: 'response' } }),
+    })
+    expect((await toolRes.json() as any).text).toBe('reply ok')
+
+    // 5. Ack clear (simulates Stop hook)
+    await fetch(`${baseUrl}/api/ack-clear`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: 'ch-e2e' }),
+    })
+
+    // 6. Queue is empty after drain
+    const res2 = await fetch(`${baseUrl}/api/messages?session=e2e`)
+    expect((await res2.json() as any).messages).toEqual([])
   })
 })
