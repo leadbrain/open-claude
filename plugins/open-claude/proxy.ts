@@ -189,8 +189,9 @@ async function register(): Promise<void> {
     return
   }
 
-  // Start polling
+  // Start polling + immediate first poll
   startPolling()
+  pollMessages()  // drain any queued messages immediately
 }
 
 // ── Polling: fetch messages from HTTP server ──
