@@ -53,7 +53,7 @@ export class LarkAdapter implements PlatformAdapter {
     // For Lark, "token" is the app secret. App ID comes from env.
     this.config = {
       appId: process.env.LARK_APP_ID ?? '',
-      appSecret: token || process.env.LARK_APP_SECRET ?? '',
+      appSecret: token || (process.env.LARK_APP_SECRET ?? ''),
       verificationToken: process.env.LARK_VERIFICATION_TOKEN ?? '',
       eventPort: parseInt(process.env.LARK_EVENT_PORT ?? '9876', 10),
     }
