@@ -17,23 +17,29 @@ This file provides persistent context for Claude across sessions. Edit freely �
 - **When uncertain**: (ask / best guess and flag / proceed and report)
 - **Response language**: (match user / always English / always [other])
 
-## Workflows
+## Messaging Platforms
 
-### Jobs Jobs Features & Scheduling Scheduling Scheduling
-Feature state is stored in `memory/jobs.json`. Manage with:
+open-claude supports Discord and Lark simultaneously. The server auto-detects platforms from credentials in `.claude/discord.env`. To add a platform, add its credentials and restart the server.
+
+- **Discord**: `DISCORD_BOT_TOKEN` in `.claude/discord.env`
+- **Lark**: `LARK_APP_ID` + `LARK_APP_SECRET` + `LARK_VERIFICATION_TOKEN` in `.claude/discord.env`
+
+## Scheduled Jobs
+
+Jobs are stored in `memory/jobs.json`. Any skill can be scheduled. Manage with:
 - `/open-claude:configure jobs list` — show status
-- `/open-claude:configure jobs enable <name> --channel <id>` — activate
+- `/open-claude:configure jobs enable <name> --channel <id> --schedule "cron"` — activate
 - `/open-claude:configure jobs disable <name>` — deactivate
 
-Available jobs:
+Built-in jobs:
 - **conversation-analysis** — daily conversation summary, updates `memory/user-context.json` and the Recent Context section below
 - **qmd** — index conversation transcripts for search (requires `/opt/homebrew/bin/qmd`)
 
-The built-in scheduler (in server-http.ts) checks `memory/jobs.json` every 60 seconds and sends `[scheduled] /<name>` to the target channel when the cron expression matches.
+Skills for jobs must be in `.claude/skills/` (project scope), not `~/.claude/skills/`.
 
 ## Recent Context
 <!-- AUTO:recent-context -->
-*This section is auto-updated by the conversation-analysis feature.*
+*This section is auto-updated by the conversation-analysis job.*
 *Enable with: `/open-claude:configure jobs enable conversation-analysis --channel <id>`*
 
 No context available yet.
