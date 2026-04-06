@@ -72,10 +72,12 @@ export class LarkAdapter implements PlatformAdapter {
     }
 
     // Create API client
+    const resolvedDomain = this.domain === 'lark' ? sdk.Domain.Lark : sdk.Domain.Feishu
     this.client = new sdk.Client({
       appId,
       appSecret,
-      domain: this.domain === 'feishu' ? sdk.Domain.Feishu : sdk.Domain.Lark,
+      appType: sdk.AppType.SelfBuild,
+      domain: resolvedDomain,
     })
 
     // Create event dispatcher
@@ -93,7 +95,7 @@ export class LarkAdapter implements PlatformAdapter {
     this.wsClient = new sdk.WSClient({
       appId,
       appSecret,
-      domain: this.domain === 'feishu' ? sdk.Domain.Feishu : sdk.Domain.Lark,
+      domain: resolvedDomain,
       loggerLevel: sdk.LoggerLevel.info,
     })
     this.wsClient.start({ eventDispatcher })
