@@ -11,14 +11,20 @@ if [ "$CLAUDE_HOOK_NOREENTRY" = "1" ]; then
   exit 0
 fi
 
-# Kill typing loop
-TYPING_PID_FILE="/tmp/open-claude-typing.pid"
-if [ -f "$TYPING_PID_FILE" ]; then
+# Kill all typing loops (per-channel PID files)
+for TYPING_PID_FILE in /tmp/open-claude-typing-*.pid; do
+  [ -f "$TYPING_PID_FILE" ] || continue
   TYPING_PID=$(cat "$TYPING_PID_FILE" 2>/dev/null)
   if [ -n "$TYPING_PID" ] && kill -0 "$TYPING_PID" 2>/dev/null; then
     kill "$TYPING_PID" 2>/dev/null
   fi
   rm -f "$TYPING_PID_FILE"
+done
+# Legacy single PID file cleanup
+if [ -f "/tmp/open-claude-typing.pid" ]; then
+  TYPING_PID=$(cat "/tmp/open-claude-typing.pid" 2>/dev/null)
+  [ -n "$TYPING_PID" ] && kill "$TYPING_PID" 2>/dev/null
+  rm -f "/tmp/open-claude-typing.pid"
 fi
 
 # Extract basic info
