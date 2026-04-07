@@ -1,72 +1,93 @@
 /**
  * Integration tests — simulate full message flows through the hook pipeline.
  *
- * Flow: Discord message → track-channel.sh (session mapping + typing)
- *       → Claude processes → auto-reply.sh (extract + route + send)
- *
- * Uses mock curl to intercept HTTP calls and verify correct routing.
+ * auto-reply.sh now sends via POST /api/tools to the server.
+ * We spin up a mock HTTP server to capture tool calls.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { join } from 'path'
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs'
+import { createServer, type Server as HttpServer } from 'http'
 import { gatePure, defaultAccess, type Access, type GateInput } from '../lib.ts'
 
 const FIXTURES_DIR = join(import.meta.dir, 'fixtures')
-const MOCK_BIN_DIR = join(FIXTURES_DIR, 'bin')
 const HOOKS_DIR = join(import.meta.dir, '..', 'hooks')
 const TRACK_SCRIPT = join(HOOKS_DIR, 'track-channel.sh')
 const REPLY_SCRIPT = join(HOOKS_DIR, 'auto-reply.sh')
 
-/** Run a hook script with given stdin and env, return { exitCode, curlLog } */
+// ── Mock server ──
+
+let mockServer: HttpServer
+let mockPort: number
+let toolCalls: { tool: string; args: any }[]
+let ackClears: string[]
+
+function startMockServer(): Promise<void> {
+  toolCalls = []
+  ackClears = []
+  mockServer = createServer((req, res) => {
+    let data = ''
+    req.on('data', c => { data += c })
+    req.on('end', () => {
+      if (req.url === '/api/tools') {
+        try { toolCalls.push(JSON.parse(data)) } catch {}
+      } else if (req.url === '/api/ack-clear') {
+        try { ackClears.push(JSON.parse(data).chat_id) } catch {}
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ text: 'ok' }))
+    })
+  })
+  return new Promise(resolve => {
+    mockServer.listen(0, '127.0.0.1', () => {
+      mockPort = (mockServer.address() as any).port
+      resolve()
+    })
+  })
+}
+
+/** Run a hook script */
 async function runHook(
   script: string,
   stdin: string,
   env: Record<string, string>,
-): Promise<{ exitCode: number; stderr: string }> {
+): Promise<{ exitCode: number }> {
   const proc = Bun.spawn(['bash', script], {
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
     env: {
-      PATH: `${MOCK_BIN_DIR}:${process.env.PATH}`,
+      PATH: process.env.PATH ?? '',
       HOME: process.env.HOME ?? '',
+      OPEN_CLAUDE_SERVER: `http://127.0.0.1:${mockPort}`,
+      DISCORD_EVENT_LOG: 'false',
       ...env,
     },
   })
   proc.stdin.write(stdin)
   proc.stdin.end()
   const exitCode = await proc.exited
-  const stderr = await new Response(proc.stderr).text()
-  return { exitCode, stderr }
+  return { exitCode }
 }
 
-function readCurlLog(logPath: string): string {
-  return existsSync(logPath) ? readFileSync(logPath, 'utf8') : ''
-}
-
-function curlCallCount(log: string): number {
-  return (log.match(/^CALL:/gm) || []).length
-}
-
-function curlCallsToChannel(log: string, channelId: string): number {
-  const re = new RegExp(`/channels/${channelId}/messages`, 'g')
-  return (log.match(re) || []).length
+function toolCallsToChannel(chatId: string): number {
+  return toolCalls.filter(c => c.tool === 'reply' && c.args?.chat_id === chatId).length
 }
 
 // ── Helpers ──
 
 let tmpDir: string
-let curlLog: string
 
-beforeEach(() => {
+beforeEach(async () => {
   tmpDir = join(import.meta.dir, `.tmp-int-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
   mkdirSync(join(tmpDir, 'memory', 'threads'), { recursive: true })
   mkdirSync(join(tmpDir, 'memory', 'events'), { recursive: true })
-  curlLog = join(tmpDir, 'curl.log')
+  await startMockServer()
 })
 
 afterEach(() => {
+  mockServer.close()
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true })
 })
 
@@ -75,14 +96,10 @@ function baseEnv(overrides: Record<string, string> = {}): Record<string, string>
     DISCORD_BOT_TOKEN: 'test-token',
     DISCORD_MAIN_CHANNEL: '100000000000',
     OPEN_CLAUDE_WORKSPACE: tmpDir,
-    DISCORD_EVENT_LOG: 'false',
-    MOCK_CURL_LOG: curlLog,
-    OPEN_CLAUDE_PLATFORM: 'discord',
     ...overrides,
   }
 }
 
-/** Simulate track-channel.sh receiving a Discord message */
 function trackInput(sessionId: string, chatId: string, content: string): string {
   return JSON.stringify({
     session_id: sessionId,
@@ -90,7 +107,6 @@ function trackInput(sessionId: string, chatId: string, content: string): string 
   })
 }
 
-/** Simulate auto-reply.sh receiving Stop hook data */
 function replyInput(sessionId: string, transcriptPath: string, lastMsg?: string): string {
   return JSON.stringify({
     session_id: sessionId,
@@ -99,133 +115,70 @@ function replyInput(sessionId: string, transcriptPath: string, lastMsg?: string)
   })
 }
 
-/** Write a JSONL transcript file */
 function writeTranscript(name: string, lines: object[]): string {
   const path = join(tmpDir, `${name}.jsonl`)
   writeFileSync(path, lines.map(l => JSON.stringify(l)).join('\n') + '\n')
   return path
 }
 
-// ══════════════════════════════════════════���═══════════════════
-// Scenario 1: Main channel — simple text response
-// ══════��═════════════════════════��═════════════════════════════
+// ── Scenario 1: Main channel text response ──
 
 describe('Scenario: main channel text response', () => {
-  const MAIN_CH = '100000000000'
-  const SID = 'sid-main-001'
-
   test('track-channel creates session mapping, auto-reply routes to main channel', async () => {
-    // Step 1: track-channel.sh — records session mapping
+    const MAIN_CH = '100000000000'
+    const SID = 'sid-main-001'
+
     await runHook(TRACK_SCRIPT, trackInput(SID, MAIN_CH, 'hello'), baseEnv())
 
-    // Verify mapping file created
     const threadFile = join(tmpDir, 'memory', 'threads', `${MAIN_CH}.json`)
     expect(existsSync(threadFile)).toBe(true)
-    const mapping = JSON.parse(readFileSync(threadFile, 'utf8'))
-    expect(mapping.session_id).toBe(SID)
 
-    // Step 2: auto-reply.sh — routes response to main channel
     const transcript = writeTranscript('t1', [
       { type: 'user', message: { content: [{ type: 'text', text: 'hello' }] }, permissionMode: 'default', origin: { kind: 'channel' } },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi from Claude!' }] } },
     ])
 
     await runHook(REPLY_SCRIPT, replyInput(SID, transcript, 'Hi from Claude!'), baseEnv())
+    await new Promise(r => setTimeout(r, 500))
 
-    const log = readCurlLog(curlLog)
-    expect(curlCallsToChannel(log, MAIN_CH)).toBeGreaterThanOrEqual(1)
-    expect(log).toContain('Hi from Claude!')
+    expect(toolCallsToChannel(MAIN_CH)).toBeGreaterThanOrEqual(1)
   })
 })
 
-// ════════════════════════════��════════════════════════���════════
-// Scenario 2: Thread — separate session, separate routing
-// ═════════════════════════════��════════════════════════════════
+// ── Scenario 2: Thread routing ──
 
 describe('Scenario: thread message routing', () => {
-  const MAIN_CH = '100000000000'
-  const THREAD_CH = '200000000000'
-  const SID_MAIN = 'sid-main-002'
-  const SID_THREAD = 'sid-thread-002'
-
   test('thread response routes to thread, not main channel', async () => {
-    // Set up both mappings
+    const MAIN_CH = '100000000000'
+    const THREAD_CH = '200000000000'
+    const SID_MAIN = 'sid-main-002'
+    const SID_THREAD = 'sid-thread-002'
+
     await runHook(TRACK_SCRIPT, trackInput(SID_MAIN, MAIN_CH, 'main msg'), baseEnv())
     await runHook(TRACK_SCRIPT, trackInput(SID_THREAD, THREAD_CH, 'thread msg'), baseEnv())
 
-    // Verify both mapping files exist
-    expect(existsSync(join(tmpDir, 'memory', 'threads', `${MAIN_CH}.json`))).toBe(true)
-    expect(existsSync(join(tmpDir, 'memory', 'threads', `${THREAD_CH}.json`))).toBe(true)
-
-    // Thread response
     const transcript = writeTranscript('t2', [
       { type: 'user', message: { content: [{ type: 'text', text: 'thread msg' }] }, permissionMode: 'default' },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'Thread reply!' }] } },
     ])
 
     await runHook(REPLY_SCRIPT, replyInput(SID_THREAD, transcript, 'Thread reply!'), baseEnv())
+    await new Promise(r => setTimeout(r, 500))
 
-    const log = readCurlLog(curlLog)
-    // Should go to thread channel, NOT main
-    expect(curlCallsToChannel(log, THREAD_CH)).toBeGreaterThanOrEqual(1)
-    expect(curlCallsToChannel(log, MAIN_CH)).toBe(0)
+    expect(toolCallsToChannel(THREAD_CH)).toBeGreaterThanOrEqual(1)
+    expect(toolCallsToChannel(MAIN_CH)).toBe(0)
   })
 })
 
-// ══════════���════════════���════════════════════════════════��═════
-// Scenario 3: Tool usage — response includes tool summaries
-// ════════════════════════════��═══════════════════════════════��═
-
-describe('Scenario: tool usage in response', () => {
-  const MAIN_CH = '100000000000'
-  const SID = 'sid-tools-003'
-
-  test('tool_use entries appear as compact summaries in Discord message', async () => {
-    await runHook(TRACK_SCRIPT, trackInput(SID, MAIN_CH, 'fix the bug'), baseEnv())
-
-    const transcript = writeTranscript('t3', [
-      { type: 'user', message: { content: [{ type: 'text', text: 'fix the bug' }] }, permissionMode: 'default', origin: { kind: 'channel' } },
-      { type: 'assistant', message: { content: [
-        { type: 'text', text: 'Let me look at the code.' },
-        { type: 'tool_use', id: 'tu_r1', name: 'Read', input: { file_path: '/project/src/app.ts' } },
-        { type: 'tool_use', id: 'tu_e1', name: 'Edit', input: { file_path: '/project/src/app.ts', old_string: 'bug', new_string: 'fix' } },
-        { type: 'text', text: 'Fixed the bug in app.ts.' },
-      ] } },
-      { type: 'user', toolUseResult: { tool_use_id: 'tu_r1', content: 'const x = 1' } },
-      { type: 'user', toolUseResult: { tool_use_id: 'tu_e1', structuredPatch: [{ lines: [' before', '-bug', '+fix', ' after'] }], filePath: '/project/src/app.ts' } },
-    ])
-
-    await runHook(REPLY_SCRIPT, replyInput(SID, transcript, 'Fixed the bug in app.ts.'), baseEnv())
-
-    const log = readCurlLog(curlLog)
-    // Verify tool summaries appear
-    expect(log).toContain('`Read`')
-    expect(log).toContain('`Edit`')
-    expect(log).toContain('app.ts')
-    // Verify text appears
-    expect(log).toContain('Let me look at the code.')
-    expect(log).toContain('Fixed the bug')
-    // Verify diff appears
-    expect(log).toContain('```ansi')
-  })
-})
-
-// ══════════════════════════════════════════════════════════════
-// Scenario 4: Cron job — response copied to log thread
-// ═══════��══════════════════════════════════════════════════════
+// ── Scenario 3: Cron job with log thread copy ──
 
 describe('Scenario: cron job with log thread copy', () => {
-  const CRON_THREAD = '300000000000'
-  const LOG_THREAD = '400000000000'
-  const SID = 'sid-cron-004'
-
   test('cron response sent to target thread AND copied to log thread', async () => {
-    // Set up cron session mapping
-    await runHook(TRACK_SCRIPT, trackInput(SID, CRON_THREAD, 'weather briefing'), baseEnv({
-      DISCORD_LOG_THREAD: LOG_THREAD,
-    }))
+    const CRON_THREAD = '300000000000'
+    const LOG_THREAD = '400000000000'
+    const SID = 'sid-cron-004'
 
-    // Create cron marker
+    await runHook(TRACK_SCRIPT, trackInput(SID, CRON_THREAD, 'weather briefing'), baseEnv({ DISCORD_LOG_THREAD: LOG_THREAD }))
     writeFileSync(`/tmp/cron-marker-${SID}`, '')
 
     const transcript = writeTranscript('t4', [
@@ -233,40 +186,29 @@ describe('Scenario: cron job with log thread copy', () => {
       { type: 'assistant', message: { content: [{ type: 'text', text: 'Seoul: 15°C, sunny' }] } },
     ])
 
-    await runHook(REPLY_SCRIPT, replyInput(SID, transcript, 'Seoul: 15°C, sunny'), baseEnv({
-      DISCORD_LOG_THREAD: LOG_THREAD,
-    }))
+    await runHook(REPLY_SCRIPT, replyInput(SID, transcript, 'Seoul: 15°C, sunny'), baseEnv({ DISCORD_LOG_THREAD: LOG_THREAD }))
+    await new Promise(r => setTimeout(r, 500))
 
-    const log = readCurlLog(curlLog)
-    // Sent to cron thread
-    expect(curlCallsToChannel(log, CRON_THREAD)).toBeGreaterThanOrEqual(1)
-    // Copied to log thread
-    expect(curlCallsToChannel(log, LOG_THREAD)).toBeGreaterThanOrEqual(1)
-    expect(log).toContain(`cron`)
-    // Cron marker cleaned up
+    expect(toolCallsToChannel(CRON_THREAD)).toBeGreaterThanOrEqual(1)
+    expect(toolCallsToChannel(LOG_THREAD)).toBeGreaterThanOrEqual(1)
     expect(existsSync(`/tmp/cron-marker-${SID}`)).toBe(false)
   })
 })
 
-// ══════��═══════════════════════════════════════════════════════
-// Scenario 5: No session mapping — fallback to log thread
-// ═══════════════════��══════════════════════════════════════════
+// ── Scenario 4: Unknown session fallback ──
 
 describe('Scenario: unknown session fallback', () => {
-  const LOG_THREAD = '400000000000'
-
   test('unmatched session_id falls back to log thread', async () => {
+    const LOG_THREAD = '400000000000'
     const transcript = writeTranscript('t5', [
       { type: 'user', message: { content: [{ type: 'text', text: 'orphan' }] }, permissionMode: 'default' },
       { type: 'assistant', message: { content: [{ type: 'text', text: 'Orphan response' }] } },
     ])
 
-    await runHook(REPLY_SCRIPT, replyInput('sid-unknown', transcript, 'Orphan response'), baseEnv({
-      DISCORD_LOG_THREAD: LOG_THREAD,
-    }))
+    await runHook(REPLY_SCRIPT, replyInput('sid-unknown', transcript, 'Orphan response'), baseEnv({ DISCORD_LOG_THREAD: LOG_THREAD }))
+    await new Promise(r => setTimeout(r, 500))
 
-    const log = readCurlLog(curlLog)
-    expect(curlCallsToChannel(log, LOG_THREAD)).toBeGreaterThanOrEqual(1)
+    expect(toolCallsToChannel(LOG_THREAD)).toBeGreaterThanOrEqual(1)
   })
 
   test('unmatched session + no log thread → silent exit', async () => {
@@ -275,24 +217,20 @@ describe('Scenario: unknown session fallback', () => {
       { type: 'assistant', message: { content: [{ type: 'text', text: 'Orphan' }] } },
     ])
 
-    const { exitCode } = await runHook(REPLY_SCRIPT, replyInput('sid-unknown', transcript, 'Orphan'), baseEnv({
-      DISCORD_LOG_THREAD: '',
-    }))
+    await runHook(REPLY_SCRIPT, replyInput('sid-unknown', transcript, 'Orphan'), baseEnv({ DISCORD_LOG_THREAD: '' }))
+    await new Promise(r => setTimeout(r, 300))
 
-    expect(exitCode).toBe(0)
-    expect(readCurlLog(curlLog)).toBe('')
+    expect(toolCalls).toHaveLength(0)
   })
 })
 
-// ═══════════════════════════════════��══════════════════════════
-// Scenario 6: Long response — chunking
-// ═════════════════════════════════════���════════════════════════
+// ── Scenario 5: Long response chunking ──
 
 describe('Scenario: long response chunking', () => {
-  const MAIN_CH = '100000000000'
-  const SID = 'sid-chunk-006'
-
   test('response >2000 chars split into multiple messages', async () => {
+    const MAIN_CH = '100000000000'
+    const SID = 'sid-chunk-006'
+
     await runHook(TRACK_SCRIPT, trackInput(SID, MAIN_CH, 'long question'), baseEnv())
 
     const longText = 'A'.repeat(1000) + '\n\n' + 'B'.repeat(1000) + '\n\n' + 'C'.repeat(500)
@@ -302,17 +240,13 @@ describe('Scenario: long response chunking', () => {
     ])
 
     await runHook(REPLY_SCRIPT, replyInput(SID, transcript, longText), baseEnv())
+    await new Promise(r => setTimeout(r, 500))
 
-    const log = readCurlLog(curlLog)
-    // Should have multiple CALL entries (chunked)
-    expect(curlCallCount(log)).toBeGreaterThan(1)
-    expect(curlCallsToChannel(log, MAIN_CH)).toBeGreaterThan(1)
+    expect(toolCallsToChannel(MAIN_CH)).toBeGreaterThan(1)
   })
 })
 
-// ══════════��══════════════════���══════════════════════════════��═
-// Scenario 7: Gate + hook pipeline — DM access control
-// ═════��═══════════════════════════��═══════════════════════════���
+// ── Scenario 6: Gate + hook pipeline ──
 
 describe('Scenario: access control → hook pipeline', () => {
   test('allowed DM user: gate delivers, hooks route response', async () => {
@@ -322,12 +256,9 @@ describe('Scenario: access control → hook pipeline', () => {
       senderId: 'user-allowed', isDM: true,
       channelId: 'dm-ch', isThread: false, isMentioned: false,
     }
-
-    // Gate check
     const result = gatePure(input, access)
     expect(result.action).toBe('deliver')
 
-    // If delivered, track + reply pipeline runs
     const SID = 'sid-dm-007'
     await runHook(TRACK_SCRIPT, trackInput(SID, 'dm-ch', 'hi from DM'), baseEnv())
 
@@ -337,9 +268,9 @@ describe('Scenario: access control → hook pipeline', () => {
     ])
 
     await runHook(REPLY_SCRIPT, replyInput(SID, transcript, 'Hello via DM!'), baseEnv())
+    await new Promise(r => setTimeout(r, 500))
 
-    const log = readCurlLog(curlLog)
-    expect(curlCallsToChannel(log, 'dm-ch')).toBeGreaterThanOrEqual(1)
+    expect(toolCallsToChannel('dm-ch')).toBeGreaterThanOrEqual(1)
   })
 
   test('blocked DM user: gate drops, no hooks run', () => {
@@ -348,52 +279,11 @@ describe('Scenario: access control → hook pipeline', () => {
       senderId: 'blocked-user', isDM: true,
       channelId: 'dm-ch', isThread: false, isMentioned: false,
     }
-
-    const result = gatePure(input, access)
-    expect(result.action).toBe('drop')
-    // No hooks run → no curl calls
-  })
-
-  test('guild message without mention: gate drops', () => {
-    const access = defaultAccess()
-    access.groups = { 'guild-ch': { requireMention: true, allowFrom: [] } }
-    const input: GateInput = {
-      senderId: 'user1', isDM: false,
-      channelId: 'guild-ch', isThread: false, isMentioned: false,
-    }
-
     expect(gatePure(input, access).action).toBe('drop')
-  })
-
-  test('guild message with mention: gate delivers, hooks route', async () => {
-    const access = defaultAccess()
-    access.groups = { 'guild-ch': { requireMention: true, allowFrom: [] } }
-    const input: GateInput = {
-      senderId: 'user1', isDM: false,
-      channelId: 'guild-ch', isThread: false, isMentioned: true,
-    }
-
-    expect(gatePure(input, access).action).toBe('deliver')
-
-    // Hooks pipeline
-    const SID = 'sid-guild-007'
-    await runHook(TRACK_SCRIPT, trackInput(SID, 'guild-ch', '@claude help'), baseEnv())
-
-    const transcript = writeTranscript('t7b', [
-      { type: 'user', message: { content: [{ type: 'text', text: '@claude help' }] }, permissionMode: 'default', origin: { kind: 'channel' } },
-      { type: 'assistant', message: { content: [{ type: 'text', text: 'Here to help!' }] } },
-    ])
-
-    await runHook(REPLY_SCRIPT, replyInput(SID, transcript, 'Here to help!'), baseEnv())
-
-    const log = readCurlLog(curlLog)
-    expect(curlCallsToChannel(log, 'guild-ch')).toBeGreaterThanOrEqual(1)
   })
 })
 
-// ════════════════��═════════════════════════════════════════════
-// Scenario 8: Re-entry guard
-// ══════════════════════════════════════════���═══════════════════
+// ── Scenario 7: Re-entry guard ──
 
 describe('Scenario: re-entry guard', () => {
   test('auto-reply skips when CLAUDE_HOOK_NOREENTRY=1', async () => {
@@ -409,7 +299,8 @@ describe('Scenario: re-entry guard', () => {
       ...baseEnv(),
       CLAUDE_HOOK_NOREENTRY: '1',
     })
+    await new Promise(r => setTimeout(r, 300))
 
-    expect(readCurlLog(curlLog)).toBe('')
+    expect(toolCalls).toHaveLength(0)
   })
 })

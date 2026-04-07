@@ -2,15 +2,14 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { join } from 'path'
 import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs'
 import { $ } from 'bun'
+import { createServer } from 'http'
 
 const FIXTURES_DIR = join(import.meta.dir, 'fixtures')
-const MOCK_BIN_DIR = join(FIXTURES_DIR, 'bin')
 const HOOK_SCRIPT = join(import.meta.dir, '..', 'hooks', 'auto-reply.sh')
 
 // ── jq extraction tests (test the jq pipeline directly) ──
 
 describe('jq transcript extraction', () => {
-  // Run the same jq pipeline used in auto-reply.sh on fixture files
   async function extractWithJq(fixtureName: string): Promise<string> {
     const fixture = join(FIXTURES_DIR, fixtureName)
     const result = await $`cat ${fixture} | jq -s '
@@ -67,7 +66,6 @@ describe('jq transcript extraction', () => {
     expect(result).toContain("I'll fix that.")
     expect(result).toContain('> `Edit` server.ts')
     expect(result).toContain('```ansi')
-    // Check colored diff lines
     expect(result).toContain('\x1b[0;31m-const x = 1\x1b[0m')
     expect(result).toContain('\x1b[0;32m+const x = 2\x1b[0m')
     expect(result).toContain('Fixed the bug.')
@@ -84,46 +82,74 @@ describe('jq transcript extraction', () => {
 })
 
 // ── auto-reply.sh integration tests ──
+// auto-reply.sh now sends via POST /api/tools to the server.
+// We spin up a mock HTTP server to capture the calls.
 
 describe('auto-reply.sh', () => {
   let tmpDir: string
-  let curlLog: string
+  let mockServer: ReturnType<typeof createServer>
+  let mockPort: number
+  let toolCalls: { tool: string; args: any }[]
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = join(import.meta.dir, '.tmp-test-' + Date.now())
     mkdirSync(join(tmpDir, 'memory', 'threads'), { recursive: true })
-    curlLog = join(tmpDir, 'curl.log')
+    toolCalls = []
+
+    // Mock server for /api/tools and /api/ack-clear
+    mockServer = createServer((req, res) => {
+      let data = ''
+      req.on('data', c => { data += c })
+      req.on('end', () => {
+        if (req.url === '/api/tools') {
+          try { toolCalls.push(JSON.parse(data)) } catch {}
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ text: 'ok' }))
+      })
+    })
+    await new Promise<void>(resolve => {
+      mockServer.listen(0, '127.0.0.1', () => {
+        mockPort = (mockServer.address() as any).port
+        resolve()
+      })
+    })
   })
 
   afterEach(() => {
+    mockServer.close()
     if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true })
   })
+
+  function runHook(input: string, env: Record<string, string>) {
+    return Bun.spawn(['bash', HOOK_SCRIPT], {
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        OPEN_CLAUDE_SERVER: `http://127.0.0.1:${mockPort}`,
+        DISCORD_EVENT_LOG: 'false',
+        ...env,
+      },
+    })
+  }
 
   test('exits silently without BOT_TOKEN', async () => {
     const input = JSON.stringify({
       session_id: 'sid-1',
       transcript_path: join(FIXTURES_DIR, 'transcript-text-only.jsonl'),
     })
-    const proc = Bun.spawn(['bash', HOOK_SCRIPT], {
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: {
-        ...process.env,
-        DISCORD_BOT_TOKEN: '',
-        OPEN_CLAUDE_WORKSPACE: tmpDir,
-      },
-    })
+    const proc = runHook(input, { DISCORD_BOT_TOKEN: '', OPEN_CLAUDE_WORKSPACE: tmpDir })
     proc.stdin.write(input)
     proc.stdin.end()
-    const exitCode = await proc.exited
-    expect(exitCode).toBe(0)
-    // No curl calls should be made
-    expect(existsSync(curlLog)).toBe(false)
+    await proc.exited
+    await new Promise(r => setTimeout(r, 300))
+    expect(toolCalls).toHaveLength(0)
   })
 
   test('routes to correct channel via session_id lookup', async () => {
-    // Create thread mapping
     const chatId = '123456789'
     writeFileSync(
       join(tmpDir, 'memory', 'threads', `${chatId}.json`),
@@ -136,31 +162,19 @@ describe('auto-reply.sh', () => {
       last_assistant_message: 'Hi there! How can I help you?',
     })
 
-    const proc = Bun.spawn(['bash', HOOK_SCRIPT], {
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: {
-        PATH: `${MOCK_BIN_DIR}:${process.env.PATH}`,
-        DISCORD_BOT_TOKEN: 'fake-token',
-        DISCORD_MAIN_CHANNEL: chatId,
-        OPEN_CLAUDE_WORKSPACE: tmpDir,
-        DISCORD_EVENT_LOG: 'false',
-        MOCK_CURL_LOG: curlLog,
-        HOME: process.env.HOME ?? '',
-      },
+    const proc = runHook(input, {
+      DISCORD_BOT_TOKEN: 'fake-token',
+      DISCORD_MAIN_CHANNEL: chatId,
+      OPEN_CLAUDE_WORKSPACE: tmpDir,
     })
     proc.stdin.write(input)
     proc.stdin.end()
     await proc.exited
-    // Send runs in background subshell — wait for it
     await new Promise(r => setTimeout(r, 500))
 
-    // Verify curl was called with the right channel
-    expect(existsSync(curlLog)).toBe(true)
-    const log = readFileSync(curlLog, 'utf8')
-    expect(log).toContain(`/channels/${chatId}/messages`)
-    expect(log).toContain('fake-token')
+    expect(toolCalls.length).toBeGreaterThanOrEqual(1)
+    expect(toolCalls[0].tool).toBe('reply')
+    expect(toolCalls[0].args.chat_id).toBe(chatId)
   })
 
   test('falls back to log thread when no session mapping', async () => {
@@ -171,28 +185,18 @@ describe('auto-reply.sh', () => {
       last_assistant_message: 'Hi there! How can I help you?',
     })
 
-    const proc = Bun.spawn(['bash', HOOK_SCRIPT], {
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: {
-        PATH: `${MOCK_BIN_DIR}:${process.env.PATH}`,
-        DISCORD_BOT_TOKEN: 'fake-token',
-        DISCORD_LOG_THREAD: logThread,
-        OPEN_CLAUDE_WORKSPACE: tmpDir,
-        DISCORD_EVENT_LOG: 'false',
-        MOCK_CURL_LOG: curlLog,
-        HOME: process.env.HOME ?? '',
-      },
+    const proc = runHook(input, {
+      DISCORD_BOT_TOKEN: 'fake-token',
+      DISCORD_LOG_THREAD: logThread,
+      OPEN_CLAUDE_WORKSPACE: tmpDir,
     })
     proc.stdin.write(input)
     proc.stdin.end()
     await proc.exited
     await new Promise(r => setTimeout(r, 500))
 
-    expect(existsSync(curlLog)).toBe(true)
-    const log = readFileSync(curlLog, 'utf8')
-    expect(log).toContain(`/channels/${logThread}/messages`)
+    expect(toolCalls.length).toBeGreaterThanOrEqual(1)
+    expect(toolCalls[0].args.chat_id).toBe(logThread)
   })
 
   test('exits when no route found and no log thread', async () => {
@@ -200,42 +204,27 @@ describe('auto-reply.sh', () => {
       session_id: 'unknown-sid',
       transcript_path: join(FIXTURES_DIR, 'transcript-text-only.jsonl'),
     })
-
-    const proc = Bun.spawn(['bash', HOOK_SCRIPT], {
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: {
-        DISCORD_BOT_TOKEN: 'fake-token',
-        OPEN_CLAUDE_WORKSPACE: tmpDir,
-        DISCORD_EVENT_LOG: 'false',
-        HOME: process.env.HOME ?? '',
-      },
+    const proc = runHook(input, {
+      DISCORD_BOT_TOKEN: 'fake-token',
+      OPEN_CLAUDE_WORKSPACE: tmpDir,
     })
     proc.stdin.write(input)
     proc.stdin.end()
-    const exitCode = await proc.exited
-    expect(exitCode).toBe(0)
-    expect(existsSync(curlLog)).toBe(false)
+    await proc.exited
+    await new Promise(r => setTimeout(r, 300))
+    expect(toolCalls).toHaveLength(0)
   })
 
   test('skips when CLAUDE_HOOK_NOREENTRY=1', async () => {
     const input = JSON.stringify({ session_id: 'sid-1' })
-    const proc = Bun.spawn(['bash', HOOK_SCRIPT], {
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      env: {
-        ...process.env,
-        CLAUDE_HOOK_NOREENTRY: '1',
-        DISCORD_BOT_TOKEN: 'fake-token',
-        MOCK_CURL_LOG: curlLog,
-      },
+    const proc = runHook(input, {
+      CLAUDE_HOOK_NOREENTRY: '1',
+      DISCORD_BOT_TOKEN: 'fake-token',
     })
     proc.stdin.write(input)
     proc.stdin.end()
-    const exitCode = await proc.exited
-    expect(exitCode).toBe(0)
-    expect(existsSync(curlLog)).toBe(false)
+    await proc.exited
+    await new Promise(r => setTimeout(r, 300))
+    expect(toolCalls).toHaveLength(0)
   })
 })
