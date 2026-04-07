@@ -186,10 +186,12 @@ PLUGIN_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OPEN_CLAUDE_SERVER="${OPEN_CLAUDE_SERVER:-http://localhost:3100}"
 
 (
-  source "$PLUGIN_DIR/hooks/platform-send.sh"
-
+  # Send via server's /api/tools (platform-agnostic — works for Discord + Lark)
   _send() {
-    send_message "$CHAT_ID" "$1"
+    curl -s -X POST "${OPEN_CLAUDE_SERVER}/api/tools" \
+      -H "Content-Type: application/json" \
+      --data-raw "$(jq -n --arg tool "reply" --arg chat_id "$CHAT_ID" --arg text "$1" \
+        '{tool: $tool, args: {chat_id: $chat_id, text: $text}}')" > /dev/null 2>&1
   }
 
   MSG_LEN=${#RESPONSE}
