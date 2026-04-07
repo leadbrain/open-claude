@@ -129,6 +129,12 @@ fi
 
 LAST_MSG=$(echo "$INPUT" | jq -r '.last_assistant_message // empty' 2>/dev/null)
 
+# Guard: if transcript extraction is too large (>4000 chars), it likely
+# picked up old conversation history. Fall back to last_assistant_message.
+if [ -n "$TRANSCRIPT_TEXT" ] && [ ${#TRANSCRIPT_TEXT} -gt 4000 ] && [ -n "$LAST_MSG" ]; then
+  TRANSCRIPT_TEXT=""
+fi
+
 if [ -n "$TRANSCRIPT_TEXT" ] && [ -n "$LAST_MSG" ]; then
   if [ "${TRANSCRIPT_TEXT: -${#LAST_MSG}}" = "$LAST_MSG" ]; then
     RESPONSE="$TRANSCRIPT_TEXT"
