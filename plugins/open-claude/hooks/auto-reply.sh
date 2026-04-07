@@ -35,12 +35,7 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
 WORKSPACE="${OPEN_CLAUDE_WORKSPACE:-$(pwd)}"
 MAIN_CHANNEL="${DISCORD_MAIN_CHANNEL:-}"
 LOG_THREAD="${DISCORD_LOG_THREAD:-}"
-BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"
 EVENT_LOG="${DISCORD_EVENT_LOG:-true}"
-
-if [ -z "$BOT_TOKEN" ]; then
-  exit 0
-fi
 
 # ── Routing: determine chat_id ──
 
