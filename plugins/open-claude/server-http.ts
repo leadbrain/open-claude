@@ -98,6 +98,24 @@ interface Session {
 const sessions = new Map<string, Session>()
 const chatToSession = new Map<string, string>()
 const ackedMessages = new Map<string, { chatId: string; emoji: string }>()
+const typingIntervals = new Map<string, ReturnType<typeof setInterval>>()  // chatId → interval
+
+function startTyping(chatId: string): void {
+  if (typingIntervals.has(chatId)) return
+  getAdapter(chatId).sendTyping(chatId).catch(() => {})
+  const interval = setInterval(() => {
+    getAdapter(chatId).sendTyping(chatId).catch(() => {})
+  }, 8000)
+  typingIntervals.set(chatId, interval)
+}
+
+function stopTyping(chatId: string): void {
+  const interval = typingIntervals.get(chatId)
+  if (interval) {
+    clearInterval(interval)
+    typingIntervals.delete(chatId)
+  }
+}
 
 function getSessionByChatId(chatId: string): Session | undefined {
   const sid = chatToSession.get(chatId)
@@ -105,7 +123,7 @@ function getSessionByChatId(chatId: string): Session | undefined {
 }
 
 function enqueueToSession(session: Session, msg: PlatformMessage): void {
-  getAdapter(msg.channelId).sendTyping(msg.channelId).catch(() => {})
+  startTyping(msg.channelId)
 
   const atts = msg.attachments.map(att => {
     const kb = (att.size / 1024).toFixed(0)
@@ -232,6 +250,7 @@ const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse
     try {
       const body = await parseBody(req)
       const chatId = body.chat_id as string
+      stopTyping(chatId)
       const adapter = getAdapter(chatId)
       for (const [msgId, ack] of ackedMessages) {
         if (ack.chatId === chatId) {
@@ -471,7 +490,7 @@ function spawnThreadSession(msg: PlatformMessage): void {
   } catch {}
 
   process.stderr.write(`open-claude: spawning thread session for ${chatId}\n`)
-  getAdapter(chatId).sendTyping(chatId).catch(() => {})
+  startTyping(chatId)
 
   const threadsDir = join(config.workspace, 'memory', 'threads')
   mkdirSync(threadsDir, { recursive: true })
