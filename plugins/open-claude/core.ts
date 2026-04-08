@@ -154,34 +154,14 @@ export function loadJobs(workspace: string): Record<string, ScheduledJob> {
 }
 
 /** Match a simple cron expression (min hour dom mon dow) against a Date */
+/** Match a cron expression against a Date using cron-parser library */
 export function matchesCron(expr: string, now: Date): boolean {
-  const parts = expr.trim().split(/\s+/)
-  if (parts.length !== 5) return false
-  const vals = [now.getMinutes(), now.getHours(), now.getDate(), now.getMonth() + 1, now.getDay()]
-  return parts.every((field, i) => matchCronField(field, vals[i]))
-}
-
-function matchCronField(field: string, value: number): boolean {
-  if (field === '*') return true
-  return field.split(',').some(part => {
-    // Handle step: */2, */3, etc.
-    if (part.includes('/')) {
-      const [range, stepStr] = part.split('/')
-      const step = parseInt(stepStr, 10)
-      if (isNaN(step) || step <= 0) return false
-      if (range === '*') return value % step === 0
-      // Handle range/step like 1-30/2
-      const [start] = range.split('-').map(Number)
-      return value >= start && value % step === 0
-    }
-    // Handle range: 1-5
-    if (part.includes('-')) {
-      const [start, end] = part.split('-').map(Number)
-      return value >= start && value <= end
-    }
-    // Exact match
-    return parseInt(part, 10) === value
-  })
+  try {
+    const { CronExpressionParser } = require('cron-parser')
+    return CronExpressionParser.parse(expr).includesDate(now)
+  } catch {
+    return false
+  }
 }
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
