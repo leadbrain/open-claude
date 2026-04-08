@@ -327,6 +327,29 @@ describe('matchesCron', () => {
     expect(matchesCron('0 9,12,15,18,21 * * *', now2)).toBe(false)
   })
 
+  test('step expression */2', () => {
+    const even = new Date(2026, 3, 5, 4, 0)   // hour=4 (even)
+    const odd = new Date(2026, 3, 5, 5, 0)    // hour=5 (odd)
+    expect(matchesCron('0 */2 * * *', even)).toBe(true)
+    expect(matchesCron('0 */2 * * *', odd)).toBe(false)
+  })
+
+  test('step expression */3', () => {
+    const h0 = new Date(2026, 3, 5, 0, 0)
+    const h3 = new Date(2026, 3, 5, 3, 0)
+    const h4 = new Date(2026, 3, 5, 4, 0)
+    expect(matchesCron('0 */3 * * *', h0)).toBe(true)
+    expect(matchesCron('0 */3 * * *', h3)).toBe(true)
+    expect(matchesCron('0 */3 * * *', h4)).toBe(false)
+  })
+
+  test('range expression 1-5', () => {
+    const mon = new Date(2026, 3, 6, 20, 0)  // Monday=1
+    const sat = new Date(2026, 3, 11, 20, 0) // Saturday=6
+    expect(matchesCron('0 20 * * 1-5', mon)).toBe(true)
+    expect(matchesCron('0 20 * * 1-5', sat)).toBe(false)
+  })
+
   test('invalid expression returns false', () => {
     const now = new Date()
     expect(matchesCron('invalid', now)).toBe(false)
