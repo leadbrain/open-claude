@@ -1,0 +1,14 @@
+{
+  "name": "isol-bridge",
+  "description": "Multi-session bridge for Claude Code — window/mirror/meta sessions communicate via file-based inbox messages. Window's turn auto-broadcasts via Stop hook; other sessions push actively via helper script.",
+  "version": "0.1.0",
+  "keywords": [
+    "multi-session",
+    "hooks",
+    "inbox",
+    "bridge"
+  ],
+  "author": {
+    "name": "leadbrain"
+  }
+}

@@ -10,6 +10,13 @@
       "category": "integration",
       "source": "./plugins/open-claude",
       "homepage": "https://github.com/leadbrain/open-claude"
+    },
+    {
+      "name": "isol-bridge",
+      "description": "Multi-session bridge for Claude Code — window/mirror/meta sessions communicate via file-based inbox messages. Window's turn auto-broadcasts via Stop hook; other sessions push actively via helper script.",
+      "category": "infrastructure",
+      "source": "./plugins/isol-bridge",
+      "homepage": "https://github.com/leadbrain/open-claude"
     }
   ]
 }
